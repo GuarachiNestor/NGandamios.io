@@ -1,0 +1,93 @@
+ALQUILER DE HERRAMIENTAS - PWA (App instalable en Android)
+=============================================================
+
+QUÉ ES ESTO
+-----------
+Es una app web que se instala en el celular como cualquier otra app:
+ícono propio, pantalla completa, funciona sin internet una vez instalada.
+Los datos (máquinas, alquileres, fotos) se guardan en el propio celular.
+
+Adentro tenés:
+- index.html, css/, js/  -> la app en sí
+- manifest.json           -> le dice a Android cómo mostrarla como app
+- sw.js                   -> hace que funcione offline
+- icons/                  -> el ícono que va a aparecer en el celular
+
+
+PASO 1: SUBIR LA APP A INTERNET (gratis, una sola vez)
+-------------------------------------------------------
+Una PWA necesita vivir en una URL con HTTPS para poder instalarse.
+La forma más simple y gratuita es GitHub Pages:
+
+1. Andá a github.com y creá una cuenta (si no tenés una).
+2. Creá un repositorio nuevo, por ejemplo "alquiler-herramientas".
+   Marcalo como público.
+3. Subí TODOS los archivos y carpetas de esta carpeta
+   (arrastralos con "Add file" > "Upload files", manteniendo la
+   estructura de carpetas: css/, js/, icons/, manifest.json, etc.)
+4. Andá a Settings > Pages del repositorio.
+5. En "Source" elegí la rama "main" y la carpeta "/ (root)". Guardá.
+6. Esperá 1-2 minutos. GitHub te va a dar una URL parecida a:
+   https://TU-USUARIO.github.io/alquiler-herramientas/
+
+Alternativa igual de fácil: netlify.com -> arrastrás la carpeta
+completa a "Deploy manually" y te da una URL al instante, sin
+necesidad de cuenta de GitHub.
+
+
+PASO 2: INSTALARLA EN EL CELULAR ANDROID
+------------------------------------------
+1. Abrí Chrome en el celular y entrá a la URL del Paso 1.
+2. Va a aparecer un cartel o un botón "Instalar app" / "Agregar a
+   pantalla de inicio". Tocalo.
+   (Si no aparece solo, tocá los 3 puntitos de arriba a la derecha
+   de Chrome > "Instalar app" o "Agregar a pantalla de inicio".)
+3. Listo: te queda un ícono como cualquier otra app. Al abrirlo,
+   entra en pantalla completa, sin la barra del navegador.
+
+
+PASO 3: USARLA SIN INTERNET
+-----------------------------
+Después de abrirla conectado a internet la primera vez, ya podés
+usarla sin conexión: cargar máquinas, alquileres y sacar fotos con
+la cámara del celular funciona todo local, sin depender de wifi
+ni datos.
+
+
+IMPORTANTE - RESPALDO DE DATOS
+--------------------------------
+Los datos quedan guardados en el celular donde se instaló la app
+(no en la nube). Esto significa:
+- Si la desinstalás o borrás datos del navegador, se pierde todo.
+- Si tu tío usa otro celular, va a tener su propio inventario vacío.
+Si más adelante quieren compartir el mismo inventario entre varios
+celulares o tener respaldo en la nube, avisame y lo armamos con una
+base de datos compartida.
+
+
+REPORTE SEMANAL EN EXCEL (compartir por WhatsApp)
+----------------------------------------------------
+Arriba a la derecha, al lado del título, hay un botón amarillo con un
+ícono de compartir. Al tocarlo:
+1. Se genera un Excel (.xlsx) con 3 hojas:
+   - Resumen: totales de la semana (alquileres, facturado, atrasados)
+   - Alquileres semana: detalle de cada alquiler cargado en los
+     últimos 7 días
+   - Stock: cantidad total, alquilada y disponible de cada máquina,
+     al momento de generar el reporte
+2. Se abre directo el selector de "Compartir" de Android: elegís
+   WhatsApp (o el chat que quieras) y se envía el archivo .xlsx.
+
+Si el celular es muy viejo o el navegador no soporta compartir
+archivos directamente, la app baja el Excel a la carpeta de
+Descargas y desde ahí lo adjuntás manualmente en WhatsApp.
+
+Nota: la primera vez que se usa este botón necesita internet (para
+bajar el motor que arma el Excel). Después de esa primera vez, ya
+queda guardado y funciona sin conexión.
+
+
+¿DUDAS O QUERÉS CAMBIAR ALGO?
+-------------------------------
+Colores, textos, campos del formulario, categorías de herramientas:
+todo esto se puede ajustar. Pedímelo y te actualizo los archivos.
