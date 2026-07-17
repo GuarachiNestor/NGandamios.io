@@ -132,11 +132,14 @@ function render() {
     <div class="shell">
       <div class="header">
         <div class="header-row">
-          <div class="header-logo">${icon("wrench")}</div>
-          <div>
-            <div class="header-title tag-font">ALQUILER DE HERRAMIENTAS</div>
-            <div class="header-sub">Control de stock y clientes</div>
+          <div class="header-left">
+            <div class="header-logo">${icon("wrench")}</div>
+            <div style="min-width:0">
+              <div class="header-title tag-font">ALQUILER DE HERRAMIENTAS</div>
+              <div class="header-sub">Control de stock y clientes</div>
+            </div>
           </div>
+          <button class="header-action" id="btn-report" title="Reporte semanal">${icon("share")}</button>
         </div>
       </div>
       <div class="content" id="content"></div>
@@ -152,6 +155,7 @@ function render() {
   renderContent();
   bindNav();
   renderModals();
+  document.getElementById("btn-report").addEventListener("click", generarReporteSemanal);
 }
 
 function navBtn(iconName, label, tabName, highlight) {
@@ -686,6 +690,104 @@ function closeModals() {
   state.editingMachine = null;
   state.viewingRentalId = null;
   renderModals();
+}
+
+/* ===================== REPORTE SEMANAL (EXCEL) ===================== */
+function generarReporteSemanal() {
+  if (typeof XLSX === "undefined") {
+    alert("No se pudo cargar el generador de Excel. Conectate a internet una vez para descargarlo y probá de nuevo (después ya queda guardado para usar offline).");
+    return;
+  }
+
+  const todayStr = todayISO();
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 6);
+  const weekAgoISO = weekAgo.toISOString().split("T")[0];
+
+  // --- Hoja 1: Resumen ---
+  const act = activeRentals();
+  const overdueCount = act.filter((r) => r.dueDate < todayStr).length;
+  const rentalsWeek = state.rentals.filter((r) => {
+    const d = (r.createdAt || "").split("T")[0];
+    return d >= weekAgoISO && d <= todayStr;
+  });
+  const totalFacturado = rentalsWeek.reduce((s, r) => s + (Number(r.total) || 0), 0);
+
+  const resumenData = [
+    ["REPORTE SEMANAL - ALQUILER DE HERRAMIENTAS"],
+    [`Período: ${fmtDate(weekAgoISO)} al ${fmtDate(todayStr)}`],
+    [],
+    ["Alquileres registrados esta semana", rentalsWeek.length],
+    ["Total facturado esta semana ($)", totalFacturado],
+    ["Alquileres activos (total)", act.length],
+    ["Devoluciones atrasadas", overdueCount],
+    ["Máquinas cargadas en el inventario", state.machines.length],
+  ];
+
+  // --- Hoja 2: Alquileres de la semana ---
+  const alquileresData = [
+    ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
+  ];
+  rentalsWeek
+    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+    .forEach((r) => {
+      const isOverdue = r.status === "Activo" && r.dueDate < todayStr;
+      alquileresData.push([
+        fmtDate((r.createdAt || "").split("T")[0]),
+        r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
+        r.periodType, r.periodCount, r.unitPrice, r.total,
+        r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
+        fmtDate(r.dueDate),
+      ]);
+    });
+  if (rentalsWeek.length === 0) alquileresData.push(["(sin alquileres cargados esta semana)"]);
+
+  // --- Hoja 3: Stock actual ---
+  const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquilado (hoy)", "Disponible (hoy)"]];
+  state.machines.forEach((m) => {
+    const alquiladas = act.filter((r) => r.machineId === m.id).length;
+    stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
+  });
+  if (state.machines.length === 0) stockData.push(["(sin máquinas cargadas)"]);
+
+  const wb = XLSX.utils.book_new();
+  const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
+  wsResumen["!cols"] = [{ wch: 34 }, { wch: 14 }];
+  const wsAlq = XLSX.utils.aoa_to_sheet(alquileresData);
+  wsAlq["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
+  const wsStock = XLSX.utils.aoa_to_sheet(stockData);
+  wsStock["!cols"] = [{ wch: 10 }, { wch: 26 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+
+  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
+  XLSX.utils.book_append_sheet(wb, wsAlq, "Alquileres semana");
+  XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
+
+  const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const filename = `Reporte_Alquiler_${todayStr}.xlsx`;
+
+  shareOrDownload(blob, filename);
+}
+
+function shareOrDownload(blob, filename) {
+  try {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: "Reporte semanal", text: "Reporte semanal de alquileres y stock" })
+        .catch(() => {}); // el usuario canceló, no hacemos nada más
+      return;
+    }
+  } catch (e) { /* sigue al fallback de descarga */ }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast("Reporte descargado. Buscalo en tus Descargas para compartirlo.");
 }
 
 /* ===================== SERVICE WORKER + INSTALACIÓN ===================== */

@@ -1,4 +1,4 @@
-const CACHE_NAME = "alquiler-hta-v1";
+const CACHE_NAME = "alquiler-hta-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -6,12 +6,15 @@ const ASSETS = [
   "./js/app.js",
   "./manifest.json",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icons/icon-512.png",
+  "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(ASSETS.map((url) => cache.add(url)))
+    )
   );
   self.skipWaiting();
 });
