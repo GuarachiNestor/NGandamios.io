@@ -365,8 +365,8 @@ function photoBox(key, label, iconName, photo) {
   return `
     <div class="photo-box ${photo ? "filled" : ""}" data-photo-pick="${key}">
       ${photo
-        ? `<img src="${photo}"><button class="photo-clear" data-photo-clear="${key}">${icon("x")}</button>`
-        : `${icon(iconName)}<div class="lbl">Subir ${label}</div>`}
+      ? `<img src="${photo}"><button class="photo-clear" data-photo-clear="${key}">${icon("x")}</button>`
+      : `${icon(iconName)}<div class="lbl">Subir ${label}</div>`}
     </div>`;
 }
 
@@ -389,8 +389,8 @@ function presupuestoHTML(machine, f, total, dueDate) {
 let alquileresFilter = "Activo";
 function viewAlquileres() {
   const filtered = state.rentals
-    .filter((r) => alquileresFilter === "Todos" ? true : r.status === alquileresFilter)
-    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      .filter((r) => alquileresFilter === "Todos" ? true : r.status === alquileresFilter)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   let html = `
     <div class="section-title tag-font">Alquileres</div>
@@ -729,17 +729,17 @@ function generarReporteSemanal() {
     ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
   ];
   rentalsWeek
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
-    .forEach((r) => {
-      const isOverdue = r.status === "Activo" && r.dueDate < todayStr;
-      alquileresData.push([
-        fmtDate((r.createdAt || "").split("T")[0]),
-        r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
-        r.periodType, r.periodCount, r.unitPrice, r.total,
-        r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
-        fmtDate(r.dueDate),
-      ]);
-    });
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+      .forEach((r) => {
+        const isOverdue = r.status === "Activo" && r.dueDate < todayStr;
+        alquileresData.push([
+          fmtDate((r.createdAt || "").split("T")[0]),
+          r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
+          r.periodType, r.periodCount, r.unitPrice, r.total,
+          r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
+          fmtDate(r.dueDate),
+        ]);
+      });
   if (rentalsWeek.length === 0) alquileresData.push(["(sin alquileres cargados esta semana)"]);
 
   // --- Hoja 3: Stock actual ---
@@ -774,7 +774,7 @@ function shareOrDownload(blob, filename) {
     const file = new File([blob], filename, { type: blob.type });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       navigator.share({ files: [file], title: "Reporte semanal", text: "Reporte semanal de alquileres y stock" })
-        .catch(() => {}); // el usuario canceló, no hacemos nada más
+          .catch(() => {}); // el usuario canceló, no hacemos nada más
       return;
     }
   } catch (e) { /* sigue al fallback de descarga */ }
