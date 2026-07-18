@@ -1,5 +1,6 @@
 /* ===================== UTILIDADES ===================== */
 const CATEGORIES = ["Eléctrica", "Manual", "Andamios/Estructura", "Medición", "Seguridad", "Otro"];
+const PERIOD_TYPES = ["Día", "Semana", "Quincena", "Mes"];
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function todayISO() { return new Date().toISOString().split("T")[0]; }
@@ -7,11 +8,20 @@ function fmtDate(iso) { if (!iso) return ""; const [y, m, d] = iso.split("-"); r
 function fmtMoney(n) { const num = Number(n) || 0; return "$" + num.toLocaleString("es-AR", { maximumFractionDigits: 0 }); }
 function esc(s) { const d = document.createElement("div"); d.innerText = s == null ? "" : s; return d.innerHTML; }
 
+function priceForPeriod(machine, periodType) {
+  if (!machine) return 0;
+  if (periodType === "Día") return machine.priceDay;
+  if (periodType === "Semana") return machine.priceWeek;
+  if (periodType === "Quincena") return machine.priceQuincena;
+  return machine.priceMonth;
+}
+
 function calcDueDate(startDate, periodType, count) {
   const d = new Date(startDate + "T00:00:00");
   const c = Number(count) || 0;
   if (periodType === "Día") d.setDate(d.getDate() + c);
   else if (periodType === "Semana") d.setDate(d.getDate() + c * 7);
+  else if (periodType === "Quincena") d.setDate(d.getDate() + c * 15);
   else if (periodType === "Mes") d.setMonth(d.getMonth() + c);
   return d.toISOString().split("T")[0];
 }
@@ -270,6 +280,7 @@ function viewMaquinas() {
         <div class="price-row">
           <div><div class="price-label">Día</div><div class="price-value">${fmtMoney(m.priceDay)}</div></div>
           <div><div class="price-label">Semana</div><div class="price-value">${fmtMoney(m.priceWeek)}</div></div>
+          <div><div class="price-label">Quincena</div><div class="price-value">${fmtMoney(m.priceQuincena)}</div></div>
           <div><div class="price-label">Mes</div><div class="price-value">${fmtMoney(m.priceMonth)}</div></div>
         </div>
         <div class="card-actions">
@@ -291,7 +302,7 @@ function viewNuevo() {
     return m.totalQty - alquiladas > 0;
   });
 
-  if (machine && f.unitPrice === null) f.unitPrice = machine.priceDay;
+  if (machine && f.unitPrice === null) f.unitPrice = priceForPeriod(machine, f.periodType);
   const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
   const total = f.totalOverride !== null ? f.totalOverride : calcTotal;
   const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
@@ -321,7 +332,7 @@ function viewNuevo() {
     <div class="section-block">
       <div class="block-title">${icon("clock")} Período de alquiler</div>
       <div class="pill-row">
-        ${["Día", "Semana", "Mes"].map((p) => `<button class="pill ${f.periodType === p ? "active" : ""}" data-period="${p}">${p}</button>`).join("")}
+        ${PERIOD_TYPES.map((p) => `<button class="pill ${f.periodType === p ? "active" : ""}" data-period="${p}">${p}</button>`).join("")}
       </div>
       <div class="field-row">
         <div class="field"><label>Cantidad de ${f.periodType.toLowerCase()}s</label><input type="number" min="1" id="f-periodCount" value="${f.periodCount}"></div>
@@ -332,11 +343,10 @@ function viewNuevo() {
 
     <div class="section-block">
       <div class="block-title">${icon("wrench")} Precio</div>
-      <div class="field-row">
-        <div class="field"><label>Precio por ${f.periodType.toLowerCase()}</label><input type="number" id="f-unitPrice" value="${f.unitPrice || 0}"></div>
-        <div class="field"><label>Total (editable)</label><input type="number" id="f-total" value="${total}" style="font-weight:700"></div>
-      </div>
-      <div class="hint" style="margin-top:-4px">Podés modificar el precio unitario o el total a mano si le hacés un descuento.</div>
+      <div class="field"><label>Precio por ${f.periodType.toLowerCase()}</label><input type="number" id="f-unitPrice" value="${f.unitPrice || 0}"></div>
+      <div class="calc-line">${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b></div>
+      <div class="field"><label>Total a cobrar (editable)</label><input type="number" id="f-total" value="${total}" style="font-weight:700"></div>
+      <div class="hint" style="margin-top:-4px">Se calcula solo multiplicando, pero podés pisar el total a mano si le hacés un descuento.</div>
     </div>
 
     <div class="section-block">
@@ -365,8 +375,8 @@ function photoBox(key, label, iconName, photo) {
   return `
     <div class="photo-box ${photo ? "filled" : ""}" data-photo-pick="${key}">
       ${photo
-      ? `<img src="${photo}"><button class="photo-clear" data-photo-clear="${key}">${icon("x")}</button>`
-      : `${icon(iconName)}<div class="lbl">Subir ${label}</div>`}
+        ? `<img src="${photo}"><button class="photo-clear" data-photo-clear="${key}">${icon("x")}</button>`
+        : `${icon(iconName)}<div class="lbl">Subir ${label}</div>`}
     </div>`;
 }
 
@@ -389,8 +399,8 @@ function presupuestoHTML(machine, f, total, dueDate) {
 let alquileresFilter = "Activo";
 function viewAlquileres() {
   const filtered = state.rentals
-      .filter((r) => alquileresFilter === "Todos" ? true : r.status === alquileresFilter)
-      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    .filter((r) => alquileresFilter === "Todos" ? true : r.status === alquileresFilter)
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   let html = `
     <div class="section-title tag-font">Alquileres</div>
@@ -449,11 +459,11 @@ function bindContentEvents() {
 
   if (state.tab === "alquileres") {
     document.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { alquileresFilter = b.dataset.filter; renderContent(); }));
-    document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renderModals(); }));
+    document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
   }
 
   if (state.tab === "inicio") {
-    document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renderModals(); }));
+    document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
   }
 }
 
@@ -463,7 +473,7 @@ function bindNuevoAlquiler() {
   document.getElementById("f-machine").addEventListener("change", (e) => {
     f.machineId = e.target.value;
     const m = state.machines.find((x) => x.id === f.machineId);
-    if (m) f.unitPrice = f.periodType === "Día" ? m.priceDay : f.periodType === "Semana" ? m.priceWeek : m.priceMonth;
+    if (m) f.unitPrice = priceForPeriod(m, f.periodType);
     f.totalOverride = null;
     renderContent();
   });
@@ -471,7 +481,7 @@ function bindNuevoAlquiler() {
   document.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => {
     f.periodType = b.dataset.period;
     const m = state.machines.find((x) => x.id === f.machineId);
-    if (m) f.unitPrice = f.periodType === "Día" ? m.priceDay : f.periodType === "Semana" ? m.priceWeek : m.priceMonth;
+    if (m) f.unitPrice = priceForPeriod(m, f.periodType);
     f.totalOverride = null;
     renderContent();
   }));
@@ -566,7 +576,7 @@ function renderModals() {
 }
 
 function machineFormModal(machine) {
-  const m = machine || { code: "", name: "", category: CATEGORIES[0], totalQty: 1, priceDay: "", priceWeek: "", priceMonth: "", notes: "" };
+  const m = machine || { code: "", name: "", category: CATEGORIES[0], totalQty: 1, priceDay: "", priceWeek: "", priceQuincena: "", priceMonth: "", notes: "" };
   return `
     <div class="modal-overlay" id="overlay">
       <div class="modal">
@@ -583,6 +593,9 @@ function machineFormModal(machine) {
         <div class="field-row">
           <div class="field"><label>Precio/día</label><input type="number" id="m-priceDay" value="${m.priceDay}"></div>
           <div class="field"><label>Precio/semana</label><input type="number" id="m-priceWeek" value="${m.priceWeek}"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Precio/quincena</label><input type="number" id="m-priceQuincena" value="${m.priceQuincena}"></div>
           <div class="field"><label>Precio/mes</label><input type="number" id="m-priceMonth" value="${m.priceMonth}"></div>
         </div>
         <div class="field"><label>Observaciones</label><textarea id="m-notes" rows="2">${esc(m.notes)}</textarea></div>
@@ -605,6 +618,7 @@ function bindMachineForm() {
       totalQty: Number(document.getElementById("m-qty").value) || 1,
       priceDay: Number(document.getElementById("m-priceDay").value) || 0,
       priceWeek: Number(document.getElementById("m-priceWeek").value) || 0,
+      priceQuincena: Number(document.getElementById("m-priceQuincena").value) || 0,
       priceMonth: Number(document.getElementById("m-priceMonth").value) || 0,
       notes: document.getElementById("m-notes").value.trim(),
     };
@@ -620,10 +634,17 @@ function bindMachineForm() {
   });
 }
 
+let renewingOpen = false;
+let renewPeriodType = "Día";
+let renewCount = 1;
+
 function rentalDetailModal() {
   const rental = state.rentals.find((r) => r.id === state.viewingRentalId);
   if (!rental) return "";
   const isOverdue = rental.status === "Activo" && rental.dueDate < todayISO();
+  const machine = state.machines.find((m) => m.id === rental.machineId);
+  const renewExtra = machine ? priceForPeriod(machine, renewPeriodType) * (Number(renewCount) || 0) : 0;
+  const renewNewDueDate = calcDueDate(rental.dueDate, renewPeriodType, renewCount);
   return `
     <div class="modal-overlay" id="overlay">
       <div class="modal">
@@ -635,15 +656,33 @@ function rentalDetailModal() {
         <div class="row-line"><span class="lab">Cliente</span><span class="val">${esc(rental.clientName)}</span></div>
         ${rental.clientPhone ? `<div class="row-line"><span class="lab">Teléfono</span><span class="val">${esc(rental.clientPhone)}</span></div>` : ""}
         ${rental.clientDni ? `<div class="row-line"><span class="lab">DNI</span><span class="val">${esc(rental.clientDni)}</span></div>` : ""}
-        <div class="row-line"><span class="lab">Período</span><span class="val">${rental.periodCount} ${rental.periodType.toLowerCase()}(s)</span></div>
+        <div class="row-line"><span class="lab">Período contratado</span><span class="val">${rental.periodCount} ${rental.periodType.toLowerCase()}(s)</span></div>
         <div class="row-line"><span class="lab">Desde</span><span class="val">${fmtDate(rental.startDate)}</span></div>
-        <div class="row-line"><span class="lab">Devolución</span><span class="val">${fmtDate(rental.dueDate)}</span></div>
+        <div class="row-line"><span class="lab">Hasta (devolución)</span><span class="val">${fmtDate(rental.dueDate)}</span></div>
         <div class="row-line"><span class="lab">Estado</span><span class="val">${rental.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo"}</span></div>
         ${rental.notes ? `<div class="row-line"><span class="lab">Notas</span><span class="val">${esc(rental.notes)}</span></div>` : ""}
+        ${rental.renewals && rental.renewals.length ? `<div class="row-line"><span class="lab">Renovaciones</span><span class="val">${rental.renewals.length}</span></div>` : ""}
         <div class="presupuesto-total"><span class="lab">Total</span><span class="val tag-font">${fmtMoney(rental.total)}</span></div>
         <div class="detail-photos" id="detail-photos"></div>
+
+        ${rental.status === "Activo" && renewingOpen ? `
+          <div class="section-block" style="margin-top:14px">
+            <div class="block-title">${icon("clock")} Renovar alquiler</div>
+            <div class="pill-row">
+              ${PERIOD_TYPES.map((p) => `<button class="pill ${renewPeriodType === p ? "active" : ""}" data-renew-period="${p}">${p}</button>`).join("")}
+            </div>
+            <div class="field"><label>Cantidad de ${renewPeriodType.toLowerCase()}s a sumar</label><input type="number" min="1" id="renew-count" value="${renewCount}"></div>
+            <div class="row-line"><span class="lab">Nueva fecha de devolución</span><span class="val">${fmtDate(renewNewDueDate)}</span></div>
+            <div class="row-line"><span class="lab">Costo adicional</span><span class="val">${fmtMoney(renewExtra)}</span></div>
+            <div class="action-row" style="margin-top:8px">
+              <button class="btn btn-secondary" id="btn-cancel-renew">Cancelar</button>
+              <button class="btn btn-primary" id="btn-confirm-renew">Confirmar renovación</button>
+            </div>
+          </div>` : ""}
+
         <div class="action-row" style="margin-top:16px">
-          ${rental.status === "Activo" ? `<button class="btn btn-primary" id="btn-return">${icon("check")} Marcar devuelto</button>` : ""}
+          ${rental.status === "Activo" && !renewingOpen ? `<button class="btn btn-secondary" id="btn-open-renew">${icon("clock")} Renovar</button>` : ""}
+          ${rental.status === "Activo" && !renewingOpen ? `<button class="btn btn-primary" id="btn-return">${icon("check")} Marcar devuelto</button>` : ""}
           <button class="btn-danger" id="btn-delete-rental">${icon("trash")}</button>
         </div>
       </div>
@@ -673,6 +712,42 @@ async function bindRentalDetail() {
     renderContent();
   });
 
+  document.getElementById("btn-open-renew")?.addEventListener("click", () => {
+    renewingOpen = true;
+    renewPeriodType = rental.periodType;
+    renewCount = 1;
+    refreshRentalModal();
+  });
+  document.getElementById("btn-cancel-renew")?.addEventListener("click", () => {
+    renewingOpen = false;
+    refreshRentalModal();
+  });
+  document.querySelectorAll("[data-renew-period]").forEach((b) => b.addEventListener("click", () => {
+    renewPeriodType = b.dataset.renewPeriod;
+    refreshRentalModal();
+  }));
+  document.getElementById("renew-count")?.addEventListener("input", (e) => {
+    renewCount = e.target.value;
+    refreshRentalModal();
+  });
+  document.getElementById("btn-confirm-renew")?.addEventListener("click", () => {
+    const machine = state.machines.find((m) => m.id === rental.machineId);
+    const extra = machine ? priceForPeriod(machine, renewPeriodType) * (Number(renewCount) || 0) : 0;
+    const newDueDate = calcDueDate(rental.dueDate, renewPeriodType, renewCount);
+    const previousDueDate = rental.dueDate;
+    state.rentals = state.rentals.map((r) => {
+      if (r.id !== rental.id) return r;
+      const renewals = r.renewals ? [...r.renewals] : [];
+      renewals.push({ date: todayISO(), periodType: renewPeriodType, count: Number(renewCount) || 0, cost: extra, previousDueDate, newDueDate });
+      return { ...r, dueDate: newDueDate, total: (Number(r.total) || 0) + extra, renewals };
+    });
+    saveRentals(state.rentals);
+    renewingOpen = false;
+    toast("Alquiler renovado");
+    renderModals();
+    renderContent();
+  });
+
   document.getElementById("btn-delete-rental").addEventListener("click", async () => {
     if (!confirm("¿Eliminar este alquiler?")) return;
     state.rentals = state.rentals.filter((r) => r.id !== rental.id);
@@ -685,6 +760,12 @@ async function bindRentalDetail() {
   });
 }
 
+function refreshRentalModal() {
+  const root = document.getElementById("modal-root");
+  root.innerHTML = rentalDetailModal();
+  bindRentalDetail();
+}
+
 function closeModals() {
   state.showMachineForm = false;
   state.editingMachine = null;
@@ -694,41 +775,40 @@ function closeModals() {
 
 /* ===================== REPORTE SEMANAL (EXCEL) ===================== */
 function generarReporteSemanal() {
-  if (typeof XLSX === "undefined") {
-    alert("No se pudo cargar el generador de Excel. Conectate a internet una vez para descargarlo y probá de nuevo (después ya queda guardado para usar offline).");
-    return;
-  }
+  try {
+    if (typeof XLSX === "undefined") {
+      alert("No se pudo cargar el generador de Excel (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
+      return;
+    }
 
-  const todayStr = todayISO();
-  const weekAgo = new Date();
-  weekAgo.setDate(weekAgo.getDate() - 6);
-  const weekAgoISO = weekAgo.toISOString().split("T")[0];
+    const todayStr = todayISO();
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 6);
+    const weekAgoISO = weekAgo.toISOString().split("T")[0];
 
-  // --- Hoja 1: Resumen ---
-  const act = activeRentals();
-  const overdueCount = act.filter((r) => r.dueDate < todayStr).length;
-  const rentalsWeek = state.rentals.filter((r) => {
-    const d = (r.createdAt || "").split("T")[0];
-    return d >= weekAgoISO && d <= todayStr;
-  });
-  const totalFacturado = rentalsWeek.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    const act = activeRentals();
+    const overdueCount = act.filter((r) => r.dueDate < todayStr).length;
+    const rentalsWeek = state.rentals.filter((r) => {
+      const d = (r.createdAt || "").split("T")[0];
+      return d >= weekAgoISO && d <= todayStr;
+    });
+    const totalFacturado = rentalsWeek.reduce((s, r) => s + (Number(r.total) || 0), 0);
 
-  const resumenData = [
-    ["REPORTE SEMANAL - ALQUILER DE HERRAMIENTAS"],
-    [`Período: ${fmtDate(weekAgoISO)} al ${fmtDate(todayStr)}`],
-    [],
-    ["Alquileres registrados esta semana", rentalsWeek.length],
-    ["Total facturado esta semana ($)", totalFacturado],
-    ["Alquileres activos (total)", act.length],
-    ["Devoluciones atrasadas", overdueCount],
-    ["Máquinas cargadas en el inventario", state.machines.length],
-  ];
+    const resumenData = [
+      ["REPORTE SEMANAL - ALQUILER DE HERRAMIENTAS"],
+      [`Período: ${fmtDate(weekAgoISO)} al ${fmtDate(todayStr)}`],
+      [],
+      ["Alquileres registrados esta semana", rentalsWeek.length],
+      ["Total facturado esta semana ($)", totalFacturado],
+      ["Alquileres activos (total)", act.length],
+      ["Devoluciones atrasadas", overdueCount],
+      ["Máquinas cargadas en el inventario", state.machines.length],
+    ];
 
-  // --- Hoja 2: Alquileres de la semana ---
-  const alquileresData = [
-    ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
-  ];
-  rentalsWeek
+    const alquileresData = [
+      ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
+    ];
+    rentalsWeek
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
       .forEach((r) => {
         const isOverdue = r.status === "Activo" && r.dueDate < todayStr;
@@ -740,54 +820,83 @@ function generarReporteSemanal() {
           fmtDate(r.dueDate),
         ]);
       });
-  if (rentalsWeek.length === 0) alquileresData.push(["(sin alquileres cargados esta semana)"]);
+    if (rentalsWeek.length === 0) alquileresData.push(["(sin alquileres cargados esta semana)"]);
 
-  // --- Hoja 3: Stock actual ---
-  const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquilado (hoy)", "Disponible (hoy)"]];
-  state.machines.forEach((m) => {
-    const alquiladas = act.filter((r) => r.machineId === m.id).length;
-    stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
-  });
-  if (state.machines.length === 0) stockData.push(["(sin máquinas cargadas)"]);
+    const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquilado (hoy)", "Disponible (hoy)"]];
+    state.machines.forEach((m) => {
+      const alquiladas = act.filter((r) => r.machineId === m.id).length;
+      stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
+    });
+    if (state.machines.length === 0) stockData.push(["(sin máquinas cargadas)"]);
 
-  const wb = XLSX.utils.book_new();
-  const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
-  wsResumen["!cols"] = [{ wch: 34 }, { wch: 14 }];
-  const wsAlq = XLSX.utils.aoa_to_sheet(alquileresData);
-  wsAlq["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
-  const wsStock = XLSX.utils.aoa_to_sheet(stockData);
-  wsStock["!cols"] = [{ wch: 10 }, { wch: 26 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+    const wb = XLSX.utils.book_new();
+    const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
+    wsResumen["!cols"] = [{ wch: 34 }, { wch: 14 }];
+    const wsAlq = XLSX.utils.aoa_to_sheet(alquileresData);
+    wsAlq["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
+    const wsStock = XLSX.utils.aoa_to_sheet(stockData);
+    wsStock["!cols"] = [{ wch: 10 }, { wch: 26 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
 
-  XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
-  XLSX.utils.book_append_sheet(wb, wsAlq, "Alquileres semana");
-  XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
+    XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
+    XLSX.utils.book_append_sheet(wb, wsAlq, "Alquileres semana");
+    XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
 
-  const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-  const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const filename = `Reporte_Alquiler_${todayStr}.xlsx`;
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const filename = `Reporte_Alquiler_${todayStr}.xlsx`;
+    const periodoTexto = `${fmtDate(weekAgoISO)} al ${fmtDate(todayStr)}`;
 
-  shareOrDownload(blob, filename);
+    presentReport(blob, filename, periodoTexto);
+  } catch (err) {
+    console.error("Error generando el reporte:", err);
+    alert("Hubo un problema generando el reporte: " + (err && err.message ? err.message : err));
+  }
 }
 
-function shareOrDownload(blob, filename) {
-  try {
-    const file = new File([blob], filename, { type: blob.type });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      navigator.share({ files: [file], title: "Reporte semanal", text: "Reporte semanal de alquileres y stock" })
-          .catch(() => {}); // el usuario canceló, no hacemos nada más
-      return;
-    }
-  } catch (e) { /* sigue al fallback de descarga */ }
-
+function presentReport(blob, filename, periodoTexto) {
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  toast("Reporte descargado. Buscalo en tus Descargas para compartirlo.");
+  let canShareFile = false;
+  let fileForShare = null;
+  try {
+    fileForShare = new File([blob], filename, { type: blob.type });
+    canShareFile = !!(navigator.share && (!navigator.canShare || navigator.canShare({ files: [fileForShare] })));
+  } catch (e) { canShareFile = false; }
+
+  const root = document.getElementById("modal-root");
+  root.innerHTML = `
+    <div class="modal-overlay" id="overlay">
+      <div class="modal">
+        <div class="modal-head">
+          <div class="modal-title tag-font">Reporte semanal</div>
+          <button class="modal-close" id="close-modal">${icon("x")}</button>
+        </div>
+        <div class="hint" style="margin-top:0">Período: ${esc(periodoTexto)}</div>
+        <div class="action-row" style="margin-top:14px;flex-direction:column">
+          ${canShareFile ? `<button class="btn btn-primary btn-block" id="btn-share-report" style="margin-top:0">${icon("share")} Compartir (WhatsApp, etc.)</button>` : ""}
+          <a class="btn btn-secondary btn-block" id="btn-download-report" href="${url}" download="${filename}" style="margin-top:10px;text-decoration:none">${icon("file")} Descargar Excel</a>
+        </div>
+        <div class="hint" style="margin-top:10px">Si "Compartir" no aparece, descargalo y adjuntalo manualmente en WhatsApp desde tus Descargas.</div>
+      </div>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeReportModal(url); });
+  document.getElementById("close-modal").addEventListener("click", () => closeReportModal(url));
+  document.getElementById("btn-share-report")?.addEventListener("click", async () => {
+    try {
+      await navigator.share({ files: [fileForShare], title: "Reporte semanal", text: "Reporte semanal de alquileres y stock" });
+    } catch (err) {
+      if (err && err.name !== "AbortError") alert("No se pudo compartir: " + err.message);
+    }
+  });
+  document.getElementById("btn-download-report")?.addEventListener("click", () => {
+    toast("Descargando reporte...");
+    setTimeout(() => closeReportModal(url), 600);
+  });
+}
+
+function closeReportModal(url) {
+  document.getElementById("modal-root").innerHTML = "";
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 /* ===================== SERVICE WORKER + INSTALACIÓN ===================== */
