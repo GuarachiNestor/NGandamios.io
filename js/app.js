@@ -149,7 +149,6 @@ function render() {
               <div class="header-sub">Control de stock y clientes</div>
             </div>
           </div>
-          <button class="header-action" id="btn-report" title="Reporte semanal">${icon("share")}</button>
         </div>
       </div>
       <div class="content" id="content"></div>
@@ -165,7 +164,6 @@ function render() {
   renderContent();
   bindNav();
   renderModals();
-  document.getElementById("btn-report").addEventListener("click", generarReporteSemanal);
 }
 
 function navBtn(iconName, label, tabName, highlight) {
@@ -259,7 +257,8 @@ function viewMaquinas() {
         <div class="section-sub">${state.machines.length} tipos de herramienta cargados</div>
       </div>
       <button class="btn" style="background:var(--ink);color:#fff;padding:8px 12px;font-size:12.5px;margin-bottom:14px" data-add-machine>${icon("plus")} Agregar</button>
-    </div>`;
+    </div>
+    <button class="btn btn-secondary" id="btn-reporte-stock" style="margin-bottom:14px">${icon("file")} Reporte de stock (Excel)</button>`;
 
   if (state.machines.length === 0) html += emptyState("package", "No hay máquinas cargadas todavía.");
 
@@ -405,6 +404,7 @@ function viewAlquileres() {
   let html = `
     <div class="section-title tag-font">Alquileres</div>
     <div class="section-sub">${state.rentals.length} alquileres registrados en total</div>
+    <button class="btn btn-secondary" id="btn-reporte-alquileres" style="margin-bottom:14px">${icon("file")} Reporte de alquileres (Excel)</button>
     <div class="filter-row">
       ${["Activo", "Devuelto", "Todos"].map((f) => `<button class="pill ${alquileresFilter === f ? "active" : ""}" data-filter="${f}">${f}</button>`).join("")}
     </div>`;
@@ -439,6 +439,7 @@ function bindContentEvents() {
   document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => { state.tab = b.dataset.go; render(); }));
 
   if (state.tab === "maquinas") {
+    document.getElementById("btn-reporte-stock")?.addEventListener("click", generarReporteStock);
     document.querySelector("[data-add-machine]")?.addEventListener("click", () => { state.editingMachine = null; state.showMachineForm = true; renderModals(); });
     document.querySelectorAll("[data-edit-machine]").forEach((b) => b.addEventListener("click", () => {
       state.editingMachine = state.machines.find((m) => m.id === b.dataset.editMachine);
@@ -458,6 +459,7 @@ function bindContentEvents() {
   if (state.tab === "nuevo") bindNuevoAlquiler();
 
   if (state.tab === "alquileres") {
+    document.getElementById("btn-reporte-alquileres")?.addEventListener("click", generarReporteAlquileres);
     document.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { alquileresFilter = b.dataset.filter; renderContent(); }));
     document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
   }
@@ -773,46 +775,60 @@ function closeModals() {
   renderModals();
 }
 
-/* ===================== REPORTE SEMANAL (EXCEL) ===================== */
-function generarReporteSemanal() {
+/* ===================== REPORTES (EXCEL) ===================== */
+function getWeekStart(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const day = d.getDay(); // 0=domingo .. 6=sábado
+  const diff = (day === 0 ? -6 : 1) - day; // retrocede hasta el lunes
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().split("T")[0];
+}
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
+function generarReporteAlquileres() {
   try {
     if (typeof XLSX === "undefined") {
       alert("No se pudo cargar el generador de Excel (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
       return;
     }
+    if (state.rentals.length === 0) {
+      alert("Todavía no hay ningún alquiler cargado.");
+      return;
+    }
 
-    const todayStr = todayISO();
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 6);
-    const weekAgoISO = weekAgo.toISOString().split("T")[0];
-
-    const act = activeRentals();
-    const overdueCount = act.filter((r) => r.dueDate < todayStr).length;
-    const rentalsWeek = state.rentals.filter((r) => {
-      const d = (r.createdAt || "").split("T")[0];
-      return d >= weekAgoISO && d <= todayStr;
+    // --- Agrupar por semana (lunes a domingo) según fecha de carga ---
+    const weekMap = {};
+    state.rentals.forEach((r) => {
+      const d = (r.createdAt || "").split("T")[0] || todayISO();
+      const weekStart = getWeekStart(d);
+      if (!weekMap[weekStart]) weekMap[weekStart] = { count: 0, total: 0 };
+      weekMap[weekStart].count += 1;
+      weekMap[weekStart].total += Number(r.total) || 0;
     });
-    const totalFacturado = rentalsWeek.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    const weekKeys = Object.keys(weekMap).sort();
 
-    const resumenData = [
-      ["REPORTE SEMANAL - ALQUILER DE HERRAMIENTAS"],
-      [`Período: ${fmtDate(weekAgoISO)} al ${fmtDate(todayStr)}`],
-      [],
-      ["Alquileres registrados esta semana", rentalsWeek.length],
-      ["Total facturado esta semana ($)", totalFacturado],
-      ["Alquileres activos (total)", act.length],
-      ["Devoluciones atrasadas", overdueCount],
-      ["Máquinas cargadas en el inventario", state.machines.length],
-    ];
+    const resumenData = [["Semana", "Cantidad de alquileres", "Monto ganado"]];
+    weekKeys.forEach((wk) => {
+      const info = weekMap[wk];
+      resumenData.push([`${fmtDate(wk)} al ${fmtDate(addDays(wk, 6))}`, info.count, info.total]);
+    });
+    const totalGeneral = state.rentals.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    resumenData.push([]);
+    resumenData.push(["TOTAL GENERAL", state.rentals.length, totalGeneral]);
 
-    const alquileresData = [
+    // --- Detalle de todos los alquileres ---
+    const detalleData = [
       ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
     ];
-    rentalsWeek
+    [...state.rentals]
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
       .forEach((r) => {
-        const isOverdue = r.status === "Activo" && r.dueDate < todayStr;
-        alquileresData.push([
+        const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
+        detalleData.push([
           fmtDate((r.createdAt || "").split("T")[0]),
           r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
           r.periodType, r.periodCount, r.unitPrice, r.total,
@@ -820,74 +836,79 @@ function generarReporteSemanal() {
           fmtDate(r.dueDate),
         ]);
       });
-    if (rentalsWeek.length === 0) alquileresData.push(["(sin alquileres cargados esta semana)"]);
-
-    const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquilado (hoy)", "Disponible (hoy)"]];
-    state.machines.forEach((m) => {
-      const alquiladas = act.filter((r) => r.machineId === m.id).length;
-      stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
-    });
-    if (state.machines.length === 0) stockData.push(["(sin máquinas cargadas)"]);
 
     const wb = XLSX.utils.book_new();
     const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
-    wsResumen["!cols"] = [{ wch: 34 }, { wch: 14 }];
-    const wsAlq = XLSX.utils.aoa_to_sheet(alquileresData);
-    wsAlq["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
-    const wsStock = XLSX.utils.aoa_to_sheet(stockData);
-    wsStock["!cols"] = [{ wch: 10 }, { wch: 26 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+    wsResumen["!cols"] = [{ wch: 26 }, { wch: 20 }, { wch: 16 }];
+    const wsDetalle = XLSX.utils.aoa_to_sheet(detalleData);
+    wsDetalle["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
 
-    XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
-    XLSX.utils.book_append_sheet(wb, wsAlq, "Alquileres semana");
-    XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
+    XLSX.utils.book_append_sheet(wb, wsResumen, "Ganado por semana");
+    XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle alquileres");
 
     const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
     const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const filename = `Reporte_Alquiler_${todayStr}.xlsx`;
-    const periodoTexto = `${fmtDate(weekAgoISO)} al ${fmtDate(todayStr)}`;
-
-    presentReport(blob, filename, periodoTexto);
+    presentReport(blob, `Reporte_Alquileres_${todayISO()}.xlsx`);
   } catch (err) {
-    console.error("Error generando el reporte:", err);
+    console.error("Error generando el reporte de alquileres:", err);
     alert("Hubo un problema generando el reporte: " + (err && err.message ? err.message : err));
   }
 }
 
-function presentReport(blob, filename, periodoTexto) {
-  const url = URL.createObjectURL(blob);
-  let canShareFile = false;
-  let fileForShare = null;
+function generarReporteStock() {
   try {
-    fileForShare = new File([blob], filename, { type: blob.type });
-    canShareFile = !!(navigator.share && (!navigator.canShare || navigator.canShare({ files: [fileForShare] })));
-  } catch (e) { canShareFile = false; }
+    if (typeof XLSX === "undefined") {
+      alert("No se pudo cargar el generador de Excel (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
+      return;
+    }
+    if (state.machines.length === 0) {
+      alert("Todavía no hay ninguna máquina cargada.");
+      return;
+    }
 
+    const act = activeRentals();
+    const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquiladas", "Disponibles"]];
+    state.machines.forEach((m) => {
+      const alquiladas = act.filter((r) => r.machineId === m.id).length;
+      stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
+    });
+    const totalMaquinas = state.machines.reduce((s, m) => s + (Number(m.totalQty) || 0), 0);
+    const totalAlquiladas = act.length;
+    stockData.push([]);
+    stockData.push(["TOTALES", "", "", totalMaquinas, totalAlquiladas, totalMaquinas - totalAlquiladas]);
+
+    const wb = XLSX.utils.book_new();
+    const wsStock = XLSX.utils.aoa_to_sheet(stockData);
+    wsStock["!cols"] = [{ wch: 10 }, { wch: 28 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
+
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    presentReport(blob, `Reporte_Stock_${todayISO()}.xlsx`);
+  } catch (err) {
+    console.error("Error generando el reporte de stock:", err);
+    alert("Hubo un problema generando el reporte: " + (err && err.message ? err.message : err));
+  }
+}
+
+function presentReport(blob, filename) {
+  const url = URL.createObjectURL(blob);
   const root = document.getElementById("modal-root");
   root.innerHTML = `
     <div class="modal-overlay" id="overlay">
       <div class="modal">
         <div class="modal-head">
-          <div class="modal-title tag-font">Reporte semanal</div>
+          <div class="modal-title tag-font">Reporte listo</div>
           <button class="modal-close" id="close-modal">${icon("x")}</button>
         </div>
-        <div class="hint" style="margin-top:0">Período: ${esc(periodoTexto)}</div>
-        <div class="action-row" style="margin-top:14px;flex-direction:column">
-          ${canShareFile ? `<button class="btn btn-primary btn-block" id="btn-share-report" style="margin-top:0">${icon("share")} Compartir (WhatsApp, etc.)</button>` : ""}
-          <a class="btn btn-secondary btn-block" id="btn-download-report" href="${url}" download="${filename}" style="margin-top:10px;text-decoration:none">${icon("file")} Descargar Excel</a>
-        </div>
-        <div class="hint" style="margin-top:10px">Si "Compartir" no aparece, descargalo y adjuntalo manualmente en WhatsApp desde tus Descargas.</div>
+        <div class="hint" style="margin-top:0">${esc(filename)}</div>
+        <a class="btn btn-primary btn-block" id="btn-download-report" href="${url}" download="${filename}" style="margin-top:10px;text-decoration:none">${icon("file")} Descargar Excel</a>
+        <div class="hint" style="margin-top:10px">Se guarda en tus Descargas. Desde ahí lo podés adjuntar en WhatsApp como cualquier otro archivo.</div>
       </div>
     </div>`;
 
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeReportModal(url); });
   document.getElementById("close-modal").addEventListener("click", () => closeReportModal(url));
-  document.getElementById("btn-share-report")?.addEventListener("click", async () => {
-    try {
-      await navigator.share({ files: [fileForShare], title: "Reporte semanal", text: "Reporte semanal de alquileres y stock" });
-    } catch (err) {
-      if (err && err.name !== "AbortError") alert("No se pudo compartir: " + err.message);
-    }
-  });
   document.getElementById("btn-download-report")?.addEventListener("click", () => {
     toast("Descargando reporte...");
     setTimeout(() => closeReportModal(url), 600);

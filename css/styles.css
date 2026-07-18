@@ -43,11 +43,6 @@ svg { width: 100%; height: 100%; }
 }
 .header-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.header-action {
-  background: var(--yellow); border: none; border-radius: 10px; width: 38px; height: 38px;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--ink);
-}
-.header-action svg { width: 18px; height: 18px; }
 .header-logo {
   background: var(--yellow); width: 36px; height: 36px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
