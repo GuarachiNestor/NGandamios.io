@@ -219,6 +219,10 @@ function viewInicio() {
     <div class="action-row">
       <button class="btn btn-primary" data-go="nuevo">${icon("plus")} Nuevo alquiler</button>
       <button class="btn btn-secondary" data-go="maquinas">${icon("package")} Ver máquinas</button>
+    </div>
+    <div class="action-row">
+      <button class="btn btn-secondary" id="btn-reporte-alquileres">${icon("file")} Reporte alquileres</button>
+      <button class="btn btn-secondary" id="btn-reporte-stock">${icon("file")} Reporte stock</button>
     </div>`;
 
   if (act.length > 0) {
@@ -257,8 +261,7 @@ function viewMaquinas() {
         <div class="section-sub">${state.machines.length} tipos de herramienta cargados</div>
       </div>
       <button class="btn" style="background:var(--ink);color:#fff;padding:8px 12px;font-size:12.5px;margin-bottom:14px" data-add-machine>${icon("plus")} Agregar</button>
-    </div>
-    <button class="btn btn-secondary" id="btn-reporte-stock" style="margin-bottom:14px">${icon("file")} Reporte de stock (Excel)</button>`;
+    </div>`;
 
   if (state.machines.length === 0) html += emptyState("package", "No hay máquinas cargadas todavía.");
 
@@ -374,8 +377,8 @@ function photoBox(key, label, iconName, photo) {
   return `
     <div class="photo-box ${photo ? "filled" : ""}" data-photo-pick="${key}">
       ${photo
-        ? `<img src="${photo}"><button class="photo-clear" data-photo-clear="${key}">${icon("x")}</button>`
-        : `${icon(iconName)}<div class="lbl">Subir ${label}</div>`}
+      ? `<img src="${photo}"><button class="photo-clear" data-photo-clear="${key}">${icon("x")}</button>`
+      : `${icon(iconName)}<div class="lbl">Subir ${label}</div>`}
     </div>`;
 }
 
@@ -398,13 +401,12 @@ function presupuestoHTML(machine, f, total, dueDate) {
 let alquileresFilter = "Activo";
 function viewAlquileres() {
   const filtered = state.rentals
-    .filter((r) => alquileresFilter === "Todos" ? true : r.status === alquileresFilter)
-    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      .filter((r) => alquileresFilter === "Todos" ? true : r.status === alquileresFilter)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   let html = `
     <div class="section-title tag-font">Alquileres</div>
     <div class="section-sub">${state.rentals.length} alquileres registrados en total</div>
-    <button class="btn btn-secondary" id="btn-reporte-alquileres" style="margin-bottom:14px">${icon("file")} Reporte de alquileres (Excel)</button>
     <div class="filter-row">
       ${["Activo", "Devuelto", "Todos"].map((f) => `<button class="pill ${alquileresFilter === f ? "active" : ""}" data-filter="${f}">${f}</button>`).join("")}
     </div>`;
@@ -439,7 +441,6 @@ function bindContentEvents() {
   document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => { state.tab = b.dataset.go; render(); }));
 
   if (state.tab === "maquinas") {
-    document.getElementById("btn-reporte-stock")?.addEventListener("click", generarReporteStock);
     document.querySelector("[data-add-machine]")?.addEventListener("click", () => { state.editingMachine = null; state.showMachineForm = true; renderModals(); });
     document.querySelectorAll("[data-edit-machine]").forEach((b) => b.addEventListener("click", () => {
       state.editingMachine = state.machines.find((m) => m.id === b.dataset.editMachine);
@@ -459,12 +460,13 @@ function bindContentEvents() {
   if (state.tab === "nuevo") bindNuevoAlquiler();
 
   if (state.tab === "alquileres") {
-    document.getElementById("btn-reporte-alquileres")?.addEventListener("click", generarReporteAlquileres);
     document.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { alquileresFilter = b.dataset.filter; renderContent(); }));
     document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
   }
 
   if (state.tab === "inicio") {
+    document.getElementById("btn-reporte-alquileres")?.addEventListener("click", generarReporteAlquileres);
+    document.getElementById("btn-reporte-stock")?.addEventListener("click", generarReporteStock);
     document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
   }
 }
@@ -825,17 +827,17 @@ function generarReporteAlquileres() {
       ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
     ];
     [...state.rentals]
-      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
-      .forEach((r) => {
-        const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
-        detalleData.push([
-          fmtDate((r.createdAt || "").split("T")[0]),
-          r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
-          r.periodType, r.periodCount, r.unitPrice, r.total,
-          r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
-          fmtDate(r.dueDate),
-        ]);
-      });
+        .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+        .forEach((r) => {
+          const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
+          detalleData.push([
+            fmtDate((r.createdAt || "").split("T")[0]),
+            r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
+            r.periodType, r.periodCount, r.unitPrice, r.total,
+            r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
+            fmtDate(r.dueDate),
+          ]);
+        });
 
     const wb = XLSX.utils.book_new();
     const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
