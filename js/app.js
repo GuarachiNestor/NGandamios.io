@@ -118,9 +118,9 @@ const state = {
 
 function freshRentalForm() {
   return {
-    items: [{ id: uid(), machineId: "" }],
+    items: [{ id: uid(), machineId: "", periodType: "Día", periodCount: 1 }],
     clientName: "", clientPhone: "", clientDni: "",
-    periodType: "Día", periodCount: 1, discount: 0, // discount = porcentaje (ej: 10 = 10%)
+    discount: 0, // porcentaje (ej: 10 = 10%)
     startDate: todayISO(), notes: "", dniPhoto: null, comprobantePhoto: null,
     showPresupuesto: false,
   };
@@ -308,17 +308,16 @@ function viewMaquinas() {
 function viewNuevo() {
   const f = state.nuevoAlquiler;
 
-  // Recalcular precio unitario de cada renglón según la máquina y el período elegidos
+  // Recalcular precio unitario de cada renglón según su propia máquina y período
   f.items.forEach((it) => {
     const m = state.machines.find((x) => x.id === it.machineId);
-    it.unitPrice = m ? priceForPeriod(m, f.periodType) : 0;
+    it.unitPrice = m ? priceForPeriod(m, it.periodType) : 0;
   });
 
-  const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0), 0);
+  const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0), 0);
   const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
   const discountAmount = calcTotal * (discountPct / 100);
   const total = Math.max(0, calcTotal - discountAmount);
-  const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
 
   let html = `
     <div class="section-title tag-font">Nuevo alquiler</div>
@@ -326,20 +325,7 @@ function viewNuevo() {
 
     <div class="section-block">
       <div class="block-title">${icon("package")} Máquinas a alquilar</div>
-      ${f.items.map((it, idx) => {
-    const opciones = state.machines.filter((m) => remainingStock(m, f.items, it.id) > 0);
-    return `
-        <div class="field-row" style="align-items:center">
-          <div class="field" style="flex:1;margin-bottom:${idx === f.items.length - 1 ? "10px" : "10px"}">
-            <label>Máquina ${idx + 1}</label>
-            <select data-item-machine="${it.id}">
-              <option value="">Seleccioná una máquina...</option>
-              ${opciones.map((m) => `<option value="${m.id}" ${m.id === it.machineId ? "selected" : ""}>${esc(m.name)} (${esc(m.code)})</option>`).join("")}
-            </select>
-          </div>
-          ${f.items.length > 1 ? `<button type="button" class="btn-danger" data-remove-item="${it.id}" style="margin-bottom:10px">${icon("trash")}</button>` : ""}
-        </div>`;
-  }).join("")}
+      ${f.items.map((it, idx) => itemCardHTML(it, idx, f)).join("")}
       <button type="button" class="btn-mini" id="btn-add-item">${icon("plus")} Agregar otra máquina</button>
       ${state.machines.length === 0 ? `<div class="hint" style="margin-top:8px">Todavía no cargaste ninguna máquina.</div>` : ""}
     </div>
@@ -351,31 +337,18 @@ function viewNuevo() {
         <div class="field"><label>Teléfono</label><input type="tel" id="f-clientPhone" value="${esc(f.clientPhone)}" placeholder="011-5555-5555"></div>
         <div class="field"><label>DNI</label><input type="text" id="f-clientDni" value="${esc(f.clientDni)}" placeholder="30111222"></div>
       </div>
-    </div>
-
-    <div class="section-block">
-      <div class="block-title">${icon("clock")} Período de alquiler</div>
-      <div class="pill-row">
-        ${PERIOD_TYPES.map((p) => `<button class="pill ${f.periodType === p ? "active" : ""}" data-period="${p}">${p}</button>`).join("")}
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Cantidad de ${f.periodType.toLowerCase()}s</label><input type="number" min="1" id="f-periodCount" value="${f.periodCount}"></div>
-        <div class="field"><label>Fecha de inicio</label><input type="date" id="f-startDate" value="${f.startDate}"></div>
-      </div>
-      <div class="hint" id="due-date-hint" style="margin-top:-2px">Devolución estimada: <b>${fmtDate(dueDate)}</b></div>
-      <div class="hint" style="margin-top:-2px">Se aplica la misma cantidad de ${f.periodType.toLowerCase()}s a todas las máquinas del presupuesto.</div>
+      <div class="field"><label>Fecha de inicio (para todas las máquinas)</label><input type="date" id="f-startDate" value="${f.startDate}"></div>
     </div>
 
     <div class="section-block">
       <div class="block-title">${icon("wrench")} Precio</div>
-      <div id="items-price-list">${itemsPriceListHTML(f)}</div>
       <div class="calc-line" id="calc-line">Subtotal: <b>${fmtMoney(calcTotal)}</b></div>
       <div class="field"><label>Descuento (%)</label><input type="number" min="0" max="100" id="f-discount" value="${f.discount || 0}" placeholder="0"></div>
       <div class="field">
         <label>Total a cobrar</label>
         <input type="number" id="f-total" value="${total}" disabled style="font-weight:700">
       </div>
-      <div class="hint" style="margin-top:-4px">El total se calcula solo: suma de cada máquina × sus períodos, menos el % de descuento que cargues.</div>
+      <div class="hint" style="margin-top:-4px">El total se calcula solo: suma de cada máquina × sus propios períodos, menos el % de descuento que cargues.</div>
     </div>
 
     <div class="section-block">
@@ -390,7 +363,7 @@ function viewNuevo() {
 
     <div class="field"><label>Observaciones</label><textarea id="f-notes" rows="2" placeholder="Depósito, accesorios entregados, etc.">${esc(f.notes)}</textarea></div>
 
-    <div id="presupuesto-container">${f.showPresupuesto ? presupuestoHTML(f, total, dueDate) : ""}</div>
+    <div id="presupuesto-container">${f.showPresupuesto ? presupuestoHTML(f, total) : ""}</div>
 
     <div class="action-row" style="margin-top:6px">
       <button class="btn btn-secondary" id="btn-presupuesto">${icon("file")} Presupuesto</button>
@@ -400,18 +373,38 @@ function viewNuevo() {
   return html;
 }
 
-// Lista de renglones "Máquina — precio por período × cantidad = subtotal"
-function itemsPriceListHTML(f) {
-  const validos = f.items.filter((it) => it.machineId);
-  if (validos.length === 0) return `<div class="hint" style="margin-top:0">Elegí al menos una máquina para ver el precio.</div>`;
-  return validos.map((it) => itemPriceLineHTML(it, f)).join("");
+// Tarjeta de un renglón: máquina + su propio período + su subtotal
+function itemCardHTML(it, idx, f) {
+  const opciones = state.machines.filter((m) => remainingStock(m, f.items, it.id) > 0);
+  return `
+    <div class="section-block" style="background:var(--bg);border:1px dashed var(--border);margin-bottom:10px;padding:11px">
+      <div class="field-row" style="align-items:center">
+        <div class="field" style="flex:1;margin-bottom:10px">
+          <label>Máquina ${idx + 1}</label>
+          <select data-item-machine="${it.id}">
+            <option value="">Seleccioná una máquina...</option>
+            ${opciones.map((m) => `<option value="${m.id}" ${m.id === it.machineId ? "selected" : ""}>${esc(m.name)} (${esc(m.code)})</option>`).join("")}
+          </select>
+        </div>
+        ${f.items.length > 1 ? `<button type="button" class="btn-danger" data-remove-item="${it.id}" style="margin-bottom:10px">${icon("trash")}</button>` : ""}
+      </div>
+      <div class="pill-row" data-item-pillrow="${it.id}">
+        ${PERIOD_TYPES.map((p) => `<button type="button" class="pill ${it.periodType === p ? "active" : ""}" data-item-period="${it.id}" data-value="${p}">${p}</button>`).join("")}
+      </div>
+      <div class="field"><label>Cantidad de ${it.periodType.toLowerCase()}s</label><input type="number" min="1" data-item-count="${it.id}" value="${it.periodCount}"></div>
+      <div id="item-price-${it.id}">${itemPriceLineHTML(it, f)}</div>
+    </div>`;
 }
 
+// Renglón "precio por período × cantidad = subtotal (devolución estimada)"
 function itemPriceLineHTML(it, f) {
   const m = state.machines.find((x) => x.id === it.machineId);
   if (!m) return "";
-  const lineTotal = (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0);
-  return `<div class="row-line" id="item-price-${it.id}"><span class="lab">${esc(m.name)} (${fmtMoney(it.unitPrice)}/${f.periodType.toLowerCase()})</span><span class="val">${f.periodCount || 0} × ${fmtMoney(it.unitPrice)} = <b>${fmtMoney(lineTotal)}</b></span></div>`;
+  const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0);
+  const dueDate = calcDueDate(f.startDate, it.periodType, it.periodCount);
+  return `
+    <div class="row-line"><span class="lab">${it.periodCount || 0} ${it.periodType.toLowerCase()}(s) &times; ${fmtMoney(it.unitPrice)}</span><span class="val"><b>${fmtMoney(lineTotal)}</b></span></div>
+    <div class="hint" style="margin:0">Devolución estimada: ${fmtDate(dueDate)}</div>`;
 }
 
 function photoBox(key, label, iconName, photo) {
@@ -423,24 +416,25 @@ function photoBox(key, label, iconName, photo) {
     </div>`;
 }
 
-function presupuestoHTML(f, total, dueDate) {
+function presupuestoHTML(f, total) {
   const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
   const validos = f.items.filter((it) => it.machineId);
   const itemsHtml = validos.map((it) => {
     const m = state.machines.find((x) => x.id === it.machineId);
     if (!m) return "";
-    const lineTotal = (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0);
-    return `<div class="row-line"><span class="lab">${esc(m.name)} (${fmtMoney(it.unitPrice)}/${f.periodType.toLowerCase()})</span><span class="val">${fmtMoney(lineTotal)}</span></div>`;
+    const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0);
+    const dueDate = calcDueDate(f.startDate, it.periodType, it.periodCount);
+    return `<div class="row-line"><span class="lab">${esc(m.name)} — ${it.periodCount} ${it.periodType.toLowerCase()}(s) (${fmtMoney(it.unitPrice)}/${it.periodType.toLowerCase()})</span><span class="val">${fmtMoney(lineTotal)}</span></div>
+      <div class="hint" style="margin:0 0 4px">Devuelve: ${fmtDate(dueDate)}</div>`;
   }).join("");
   return `
     <div class="presupuesto">
       <div class="presupuesto-title tag-font">Presupuesto</div>
       <div class="presupuesto-date">Emitido el ${fmtDate(todayISO())}</div>
       <div class="row-line"><span class="lab">Cliente</span><span class="val">${esc(f.clientName) || "-"}</span></div>
+      <div class="row-line"><span class="lab">Fecha de inicio</span><span class="val">${fmtDate(f.startDate)}</span></div>
       ${itemsHtml}
-      <div class="row-line"><span class="lab">Período</span><span class="val">${f.periodCount} ${f.periodType.toLowerCase()}(s)</span></div>
       ${discountPct ? `<div class="row-line"><span class="lab">Descuento</span><span class="val">${discountPct}%</span></div>` : ""}
-      <div class="row-line"><span class="lab">Desde / hasta</span><span class="val">${fmtDate(f.startDate)} — ${fmtDate(dueDate)}</span></div>
       <div class="presupuesto-total"><span class="lab">Total</span><span class="val tag-font">${fmtMoney(total)}</span></div>
       <div class="presupuesto-foot">Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.</div>
       <button class="btn btn-primary btn-block" id="btn-presupuesto-pdf" style="margin-top:10px">${icon("share")} Compartir por WhatsApp (PDF)</button>
@@ -531,7 +525,7 @@ function bindNuevoAlquiler() {
   }));
 
   document.getElementById("btn-add-item")?.addEventListener("click", () => {
-    f.items.push({ id: uid(), machineId: "" });
+    f.items.push({ id: uid(), machineId: "", periodType: "Día", periodCount: 1 });
     renderContent();
   });
 
@@ -540,15 +534,21 @@ function bindNuevoAlquiler() {
     renderContent();
   }));
 
-  document.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => {
-    f.periodType = b.dataset.period;
+  document.querySelectorAll("[data-item-period]").forEach((b) => b.addEventListener("click", () => {
+    const item = f.items.find((it) => it.id === b.dataset.itemPeriod);
+    if (item) item.periodType = b.dataset.value;
     renderContent();
+  }));
+
+  document.querySelectorAll("[data-item-count]").forEach((inp) => inp.addEventListener("input", (e) => {
+    const item = f.items.find((it) => it.id === inp.dataset.itemCount);
+    if (item) item.periodCount = e.target.value;
+    updatePrecioDisplay();
   }));
 
   document.getElementById("f-clientName").addEventListener("input", (e) => { f.clientName = e.target.value; });
   document.getElementById("f-clientPhone").addEventListener("input", (e) => { f.clientPhone = e.target.value; });
   document.getElementById("f-clientDni").addEventListener("input", (e) => { f.clientDni = e.target.value; });
-  document.getElementById("f-periodCount").addEventListener("input", (e) => { f.periodCount = e.target.value; updatePrecioDisplay(); });
   document.getElementById("f-startDate").addEventListener("input", (e) => { f.startDate = e.target.value; updatePrecioDisplay(); });
   document.getElementById("f-discount").addEventListener("input", (e) => { f.discount = e.target.value; updatePrecioDisplay(); });
   document.getElementById("f-notes").addEventListener("input", (e) => { f.notes = e.target.value; });
@@ -593,21 +593,22 @@ function bindNuevoAlquiler() {
     const validItems = f.items.filter((it) => it.machineId);
     const calcTotal = validItems.reduce((sum, it) => {
       const m = state.machines.find((x) => x.id === it.machineId);
-      const unitPrice = m ? priceForPeriod(m, f.periodType) : 0;
-      return sum + unitPrice * (Number(f.periodCount) || 0);
+      const unitPrice = m ? priceForPeriod(m, it.periodType) : 0;
+      return sum + unitPrice * (Number(it.periodCount) || 0);
     }, 0);
     const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
-    const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
 
-    // Se crea un alquiler por cada máquina, repartiendo el descuento en proporción
-    // a lo que pesa cada máquina en el total (así el stock sigue contándose por máquina).
+    // Se crea un alquiler por cada máquina (cada una con su propio período y
+    // fecha de devolución), repartiendo el descuento en proporción a lo que
+    // pesa cada máquina en el total, así el stock sigue contándose por máquina.
     let discountAsignado = 0;
     const nuevosRentals = [];
     for (let i = 0; i < validItems.length; i++) {
       const it = validItems[i];
       const machine = state.machines.find((m) => m.id === it.machineId);
-      const unitPrice = priceForPeriod(machine, f.periodType);
-      const lineTotal = unitPrice * (Number(f.periodCount) || 0);
+      const unitPrice = priceForPeriod(machine, it.periodType);
+      const lineTotal = unitPrice * (Number(it.periodCount) || 0);
+      const dueDate = calcDueDate(f.startDate, it.periodType, it.periodCount);
       const lineDiscountAmount = calcTotal > 0 ? lineTotal * (discountPct / 100) : 0;
       let itemDiscountAmount;
       if (i === validItems.length - 1) {
@@ -621,7 +622,7 @@ function bindNuevoAlquiler() {
         id: uid(),
         machineId: machine.id, machineName: machine.name, machineCode: machine.code,
         clientName: f.clientName.trim(), clientPhone: f.clientPhone.trim(), clientDni: f.clientDni.trim(),
-        periodType: f.periodType, periodCount: Number(f.periodCount), unitPrice,
+        periodType: it.periodType, periodCount: Number(it.periodCount), unitPrice,
         discountPct, discount: Math.round(itemDiscountAmount), total,
         startDate: f.startDate, dueDate, status: "Activo", notes: f.notes.trim(),
         hasDniPhoto: !!f.dniPhoto, hasComprobantePhoto: !!f.comprobantePhoto,
@@ -645,32 +646,30 @@ function bindNuevoAlquiler() {
 function bindPresupuestoPdfButton() {
   const f = state.nuevoAlquiler;
   document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", () => {
-    const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0), 0);
+    const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0), 0);
     const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
     const discountAmount = calcTotal * (discountPct / 100);
     const total = Math.max(0, calcTotal - discountAmount);
-    const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
-    generarPresupuestoPDF(f, total, dueDate, discountPct, calcTotal);
+    generarPresupuestoPDF(f, total, discountPct, calcTotal);
   });
 }
 
-// Actualiza los números derivados (renglones de precio, total, fecha de devolución, presupuesto)
+// Actualiza los números derivados (renglones de precio, total, presupuesto)
 // sin volver a dibujar todo el formulario, para no perder el foco mientras se escribe.
 function updatePrecioDisplay() {
   const f = state.nuevoAlquiler;
   f.items.forEach((it) => {
     const m = state.machines.find((x) => x.id === it.machineId);
-    it.unitPrice = m ? priceForPeriod(m, f.periodType) : 0;
+    it.unitPrice = m ? priceForPeriod(m, it.periodType) : 0;
   });
-  const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0), 0);
+  const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0), 0);
   const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
   const discountAmount = calcTotal * (discountPct / 100);
   const total = Math.max(0, calcTotal - discountAmount);
-  const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
 
   f.items.filter((it) => it.machineId).forEach((it) => {
     const lineEl = document.getElementById("item-price-" + it.id);
-    if (lineEl) lineEl.outerHTML = itemPriceLineHTML(it, f);
+    if (lineEl) lineEl.innerHTML = itemPriceLineHTML(it, f);
   });
 
   const calcLineEl = document.getElementById("calc-line");
@@ -679,12 +678,9 @@ function updatePrecioDisplay() {
   const totalEl = document.getElementById("f-total");
   if (totalEl) totalEl.value = total;
 
-  const dueHintEl = document.getElementById("due-date-hint");
-  if (dueHintEl) dueHintEl.innerHTML = `Devolución estimada: <b>${fmtDate(dueDate)}</b>`;
-
   const presupuestoCont = document.getElementById("presupuesto-container");
   if (presupuestoCont) {
-    presupuestoCont.innerHTML = f.showPresupuesto ? presupuestoHTML(f, total, dueDate) : "";
+    presupuestoCont.innerHTML = f.showPresupuesto ? presupuestoHTML(f, total) : "";
     bindPresupuestoPdfButton();
   }
 }
@@ -693,7 +689,9 @@ function validateNuevo() {
   const f = state.nuevoAlquiler;
   if (!f.items.some((it) => it.machineId)) return "Elegí al menos una máquina";
   if (!f.clientName.trim()) return "Ingresá el nombre del cliente";
-  if (!f.periodCount || Number(f.periodCount) <= 0) return "Ingresá una cantidad de períodos válida";
+  if (f.items.some((it) => it.machineId && (!it.periodCount || Number(it.periodCount) <= 0))) {
+    return "Ingresá una cantidad de períodos válida para cada máquina";
+  }
   return null;
 }
 
@@ -904,7 +902,7 @@ function closeModals() {
 }
 
 /* ===================== PRESUPUESTO (PDF) ===================== */
-function generarPresupuestoPDF(f, total, dueDate, discountPct, calcTotal) {
+function generarPresupuestoPDF(f, total, discountPct, calcTotal) {
   try {
     if (typeof window.jspdf === "undefined") {
       alert("No se pudo cargar el generador de PDF (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
@@ -939,7 +937,7 @@ function generarPresupuestoPDF(f, total, dueDate, discountPct, calcTotal) {
 
     line("Cliente", f.clientName || "-");
     if (f.clientPhone) line("Teléfono", f.clientPhone);
-    line("Período", `${f.periodCount} ${f.periodType.toLowerCase()}(s)`);
+    line("Fecha de inicio", fmtDate(f.startDate));
 
     y += 2;
     doc.setDrawColor(225);
@@ -949,8 +947,15 @@ function generarPresupuestoPDF(f, total, dueDate, discountPct, calcTotal) {
     f.items.filter((it) => it.machineId).forEach((it) => {
       const m = state.machines.find((x) => x.id === it.machineId);
       if (!m) return;
-      const lineTotal = (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0);
-      line(`${m.name} (${fmtMoney(it.unitPrice)}/${f.periodType.toLowerCase()})`, fmtMoney(lineTotal));
+      const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0);
+      const dueDate = calcDueDate(f.startDate, it.periodType, it.periodCount);
+      line(m.name, fmtMoney(lineTotal));
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(130);
+      doc.text(`${it.periodCount} ${it.periodType.toLowerCase()}(s) x ${fmtMoney(it.unitPrice)} - devuelve ${fmtDate(dueDate)}`, 14, y - 4);
+      doc.setTextColor(20);
+      y += 2;
     });
 
     y += 2;
