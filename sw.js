@@ -1,4 +1,4 @@
-const CACHE_NAME = "alquiler-hta-v6";
+const CACHE_NAME = "alquiler-hta-v7";
 const ASSETS = [
     "./",
     "./index.html",
@@ -8,6 +8,7 @@ const ASSETS = [
     "./icons/icon-192.png",
     "./icons/icon-512.png",
     "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+    "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js",
     "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"
 ];
 

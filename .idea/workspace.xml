@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1bb7b20d-04c5-4b8c-a7a6-c46f5ff1fcc7" name="Changes" comment="ATUALIZACION">
+    <list default="true" id="1bb7b20d-04c5-4b8c-a7a6-c46f5ff1fcc7" name="Changes" comment="ACTUALIZACIONES">
       <change beforePath="$PROJECT_DIR$/css/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/css/styles.css" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/index.html" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/js/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/js/app.js" afterDir="false" />
@@ -166,7 +166,15 @@
       <option name="project" value="LOCAL" />
       <updated>1784417504174</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="ACTUALIZACIONES">
+      <option name="closed" value="true" />
+      <created>1784420914615</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1784420914615</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -179,6 +187,7 @@
     <MESSAGE value="DELETE" />
     <MESSAGE value="CAMBIOS LOGO YA CTUALIZACION" />
     <MESSAGE value="ATUALIZACION" />
-    <option name="LAST_COMMIT_MESSAGE" value="ATUALIZACION" />
+    <MESSAGE value="ACTUALIZACIONES" />
+    <option name="LAST_COMMIT_MESSAGE" value="ACTUALIZACIONES" />
   </component>
 </project>

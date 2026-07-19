@@ -341,7 +341,7 @@ function viewNuevo() {
         <div class="field"><label>Cantidad de ${f.periodType.toLowerCase()}s</label><input type="number" min="1" id="f-periodCount" value="${f.periodCount}"></div>
         <div class="field"><label>Fecha de inicio</label><input type="date" id="f-startDate" value="${f.startDate}"></div>
       </div>
-      <div class="hint" style="margin-top:-2px">Devolución estimada: <b>${fmtDate(dueDate)}</b></div>
+      <div class="hint" id="due-date-hint" style="margin-top:-2px">Devolución estimada: <b>${fmtDate(dueDate)}</b></div>
     </div>
 
     <div class="section-block">
@@ -351,7 +351,7 @@ function viewNuevo() {
         <input type="number" id="f-unitPrice" value="${f.unitPrice || 0}" disabled>
       </div>
       <div class="hint" style="margin-top:-6px">${machine ? "Tomado automáticamente del precio cargado en la máquina." : "Elegí una máquina para ver su precio."}</div>
-      <div class="calc-line">${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b></div>
+      <div class="calc-line" id="calc-line">${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b></div>
       <div class="field"><label>Descuento ($)</label><input type="number" min="0" id="f-discount" value="${f.discount || 0}" placeholder="0"></div>
       <div class="field">
         <label>Total a cobrar</label>
@@ -366,13 +366,13 @@ function viewNuevo() {
         ${photoBox("dni", "DNI", "id", f.dniPhoto)}
         ${photoBox("comp", "Comprobante", "receipt", f.comprobantePhoto)}
       </div>
-      <input type="file" accept="image/*" capture="environment" id="input-photo-dni" style="display:none">
-      <input type="file" accept="image/*" capture="environment" id="input-photo-comp" style="display:none">
+      <input type="file" accept="image/*" id="input-photo-dni" style="display:none">
+      <input type="file" accept="image/*" id="input-photo-comp" style="display:none">
     </div>
 
     <div class="field"><label>Observaciones</label><textarea id="f-notes" rows="2" placeholder="Depósito, accesorios entregados, etc.">${esc(f.notes)}</textarea></div>
 
-    ${f.showPresupuesto && machine ? presupuestoHTML(machine, f, total, dueDate) : ""}
+    <div id="presupuesto-container">${f.showPresupuesto && machine ? presupuestoHTML(machine, f, total, dueDate) : ""}</div>
 
     <div class="action-row" style="margin-top:6px">
       <button class="btn btn-secondary" id="btn-presupuesto">${icon("file")} Presupuesto</button>
@@ -499,9 +499,9 @@ function bindNuevoAlquiler() {
   document.getElementById("f-clientName").addEventListener("input", (e) => { f.clientName = e.target.value; });
   document.getElementById("f-clientPhone").addEventListener("input", (e) => { f.clientPhone = e.target.value; });
   document.getElementById("f-clientDni").addEventListener("input", (e) => { f.clientDni = e.target.value; });
-  document.getElementById("f-periodCount").addEventListener("input", (e) => { f.periodCount = e.target.value; syncTotals(); });
-  document.getElementById("f-startDate").addEventListener("input", (e) => { f.startDate = e.target.value; syncTotals(); });
-  document.getElementById("f-discount").addEventListener("input", (e) => { f.discount = e.target.value; syncTotals(); });
+  document.getElementById("f-periodCount").addEventListener("input", (e) => { f.periodCount = e.target.value; updatePrecioDisplay(); });
+  document.getElementById("f-startDate").addEventListener("input", (e) => { f.startDate = e.target.value; updatePrecioDisplay(); });
+  document.getElementById("f-discount").addEventListener("input", (e) => { f.discount = e.target.value; updatePrecioDisplay(); });
   document.getElementById("f-notes").addEventListener("input", (e) => { f.notes = e.target.value; });
 
   document.querySelectorAll("[data-photo-pick]").forEach((box) => box.addEventListener("click", () => {
@@ -535,15 +535,7 @@ function bindNuevoAlquiler() {
     renderContent();
   });
 
-  document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", () => {
-    const m = state.machines.find((x) => x.id === f.machineId);
-    if (!m) return;
-    const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-    const discount = Number(f.discount) || 0;
-    const total = Math.max(0, calcTotal - discount);
-    const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
-    generarPresupuestoPDF(m, f, total, dueDate, discount, calcTotal);
-  });
+  bindPresupuestoPdfButton();
 
   document.getElementById("btn-confirmar").addEventListener("click", async () => {
     const err = validateNuevo();
@@ -573,7 +565,45 @@ function bindNuevoAlquiler() {
   });
 }
 
-function syncTotals() { renderContent(); }
+function bindPresupuestoPdfButton() {
+  const f = state.nuevoAlquiler;
+  document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", () => {
+    const m = state.machines.find((x) => x.id === f.machineId);
+    if (!m) return;
+    const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
+    const discount = Number(f.discount) || 0;
+    const total = Math.max(0, calcTotal - discount);
+    const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
+    generarPresupuestoPDF(m, f, total, dueDate, discount, calcTotal);
+  });
+}
+
+// Actualiza los números derivados (cálculo, total, fecha de devolución, presupuesto)
+// sin volver a dibujar todo el formulario, para no perder el foco mientras se escribe.
+function updatePrecioDisplay() {
+  const f = state.nuevoAlquiler;
+  const machine = state.machines.find((m) => m.id === f.machineId);
+  f.unitPrice = machine ? priceForPeriod(machine, f.periodType) : 0;
+  const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
+  const discount = Number(f.discount) || 0;
+  const total = Math.max(0, calcTotal - discount);
+  const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
+
+  const calcLineEl = document.getElementById("calc-line");
+  if (calcLineEl) calcLineEl.innerHTML = `${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b>`;
+
+  const totalEl = document.getElementById("f-total");
+  if (totalEl) totalEl.value = total;
+
+  const dueHintEl = document.getElementById("due-date-hint");
+  if (dueHintEl) dueHintEl.innerHTML = `Devolución estimada: <b>${fmtDate(dueDate)}</b>`;
+
+  const presupuestoCont = document.getElementById("presupuesto-container");
+  if (presupuestoCont) {
+    presupuestoCont.innerHTML = f.showPresupuesto && machine ? presupuestoHTML(machine, f, total, dueDate) : "";
+    bindPresupuestoPdfButton();
+  }
+}
 
 function validateNuevo() {
   const f = state.nuevoAlquiler;
@@ -885,9 +915,9 @@ function addDays(dateStr, n) {
   return d.toISOString().split("T")[0];
 }
 
-function generarReporteAlquileres() {
+async function generarReporteAlquileres() {
   try {
-    if (typeof XLSX === "undefined") {
+    if (typeof ExcelJS === "undefined") {
       alert("No se pudo cargar el generador de Excel (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
       return;
     }
@@ -895,6 +925,7 @@ function generarReporteAlquileres() {
       alert("Todavía no hay ningún alquiler cargado.");
       return;
     }
+    toast("Generando reporte... si hay muchas fotos puede tardar unos segundos.");
 
     // --- Agrupar por semana (lunes a domingo) según fecha de carga ---
     const weekMap = {};
@@ -906,44 +937,87 @@ function generarReporteAlquileres() {
       weekMap[weekStart].total += Number(r.total) || 0;
     });
     const weekKeys = Object.keys(weekMap).sort();
+    const totalGeneral = state.rentals.reduce((s, r) => s + (Number(r.total) || 0), 0);
 
-    const resumenData = [["Semana", "Cantidad de alquileres", "Monto ganado"]];
+    const wb = new ExcelJS.Workbook();
+
+    // --- Hoja 1: resumen semanal ---
+    const wsResumen = wb.addWorksheet("Ganado por semana");
+    wsResumen.columns = [
+      { header: "Semana", key: "semana", width: 26 },
+      { header: "Cantidad de alquileres", key: "cant", width: 20 },
+      { header: "Monto ganado", key: "monto", width: 16 },
+    ];
+    wsResumen.getRow(1).font = { bold: true };
     weekKeys.forEach((wk) => {
       const info = weekMap[wk];
-      resumenData.push([`${fmtDate(wk)} al ${fmtDate(addDays(wk, 6))}`, info.count, info.total]);
+      wsResumen.addRow({ semana: `${fmtDate(wk)} al ${fmtDate(addDays(wk, 6))}`, cant: info.count, monto: info.total });
     });
-    const totalGeneral = state.rentals.reduce((s, r) => s + (Number(r.total) || 0), 0);
-    resumenData.push([]);
-    resumenData.push(["TOTAL GENERAL", state.rentals.length, totalGeneral]);
+    wsResumen.addRow({});
+    wsResumen.addRow({ semana: "TOTAL GENERAL", cant: state.rentals.length, monto: totalGeneral });
 
-    // --- Detalle de todos los alquileres ---
-    const detalleData = [
-      ["Fecha carga", "Máquina", "Código", "Cliente", "Teléfono", "Período", "Cant. períodos", "Precio unitario", "Total", "Estado", "Fecha devolución"],
+    // --- Hoja 2: detalle de cada alquiler, con descuento, observaciones y fotos ---
+    const wsDetalle = wb.addWorksheet("Detalle alquileres");
+    wsDetalle.columns = [
+      { header: "Fecha carga", key: "fecha", width: 12 },
+      { header: "Máquina", key: "maquina", width: 24 },
+      { header: "Código", key: "codigo", width: 10 },
+      { header: "Cliente", key: "cliente", width: 20 },
+      { header: "Teléfono", key: "telefono", width: 15 },
+      { header: "Período", key: "periodo", width: 10 },
+      { header: "Cant. períodos", key: "cant", width: 12 },
+      { header: "Precio unitario", key: "precio", width: 13 },
+      { header: "Descuento", key: "descuento", width: 12 },
+      { header: "Total", key: "total", width: 12 },
+      { header: "Estado", key: "estado", width: 10 },
+      { header: "Fecha devolución", key: "devolucion", width: 14 },
+      { header: "Observaciones", key: "obs", width: 32 },
+      { header: "Foto DNI", key: "fotoDni", width: 14 },
+      { header: "Foto comprobante", key: "fotoComp", width: 14 },
     ];
-    [...state.rentals]
-        .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
-        .forEach((r) => {
-          const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
-          detalleData.push([
-            fmtDate((r.createdAt || "").split("T")[0]),
-            r.machineName, r.machineCode || "", r.clientName, r.clientPhone || "",
-            r.periodType, r.periodCount, r.unitPrice, r.total,
-            r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
-            fmtDate(r.dueDate),
-          ]);
-        });
+    wsDetalle.getRow(1).font = { bold: true };
 
-    const wb = XLSX.utils.book_new();
-    const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
-    wsResumen["!cols"] = [{ wch: 26 }, { wch: 20 }, { wch: 16 }];
-    const wsDetalle = XLSX.utils.aoa_to_sheet(detalleData);
-    wsDetalle["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 8 }, { wch: 18 }, { wch: 14 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
+    const rentalsOrdenados = [...state.rentals].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
 
-    XLSX.utils.book_append_sheet(wb, wsResumen, "Ganado por semana");
-    XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle alquileres");
+    for (let i = 0; i < rentalsOrdenados.length; i++) {
+      const r = rentalsOrdenados[i];
+      const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
+      wsDetalle.addRow({
+        fecha: fmtDate((r.createdAt || "").split("T")[0]),
+        maquina: r.machineName, codigo: r.machineCode || "", cliente: r.clientName, telefono: r.clientPhone || "",
+        periodo: r.periodType, cant: r.periodCount, precio: r.unitPrice, descuento: r.discount || 0, total: r.total,
+        estado: r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
+        devolucion: fmtDate(r.dueDate), obs: r.notes || "",
+      });
 
-    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const excelRow = i + 2; // la fila 1 es el encabezado
+      let hayFoto = false;
+
+      if (r.hasDniPhoto) {
+        try {
+          const dataUrl = await getPhoto("dni-" + r.id);
+          if (dataUrl) {
+            const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
+            wsDetalle.addImage(imgId, { tl: { col: 13, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
+            hayFoto = true;
+          }
+        } catch (e) { console.error("No se pudo incluir la foto de DNI del alquiler " + r.id + ":", e); }
+      }
+      if (r.hasComprobantePhoto) {
+        try {
+          const dataUrl = await getPhoto("comp-" + r.id);
+          if (dataUrl) {
+            const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
+            wsDetalle.addImage(imgId, { tl: { col: 14, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
+            hayFoto = true;
+          }
+        } catch (e) { console.error("No se pudo incluir la foto del comprobante del alquiler " + r.id + ":", e); }
+      }
+      if (hayFoto) wsDetalle.getRow(excelRow).height = 44;
+    }
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     presentReport(blob, `Reporte_Alquileres_${todayISO()}.xlsx`);
   } catch (err) {
     console.error("Error generando el reporte de alquileres:", err);

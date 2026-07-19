@@ -190,4 +190,4 @@ input:disabled { background: var(--bg); color: var(--sub); -webkit-text-fill-col
   align-items: center; justify-content: space-between; gap: 10px;
 }
 .install-banner.show { display: flex; }
-.install-banner button { background: var(--yellow); border: none; border-radius: 8px; padding: 7px 12px; font-weight: 600; font-size: 12px; } 600; font-size: 12px; }
+.install-banner button { background: var(--yellow); border: none; border-radius: 8px; padding: 7px 12px; font-weight: 600; font-size: 12px; }
