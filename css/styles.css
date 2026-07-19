@@ -74,7 +74,8 @@ svg { width: 100%; height: 100%; }
 .btn-primary { background: var(--yellow); color: var(--ink); flex: 1; }
 .btn-secondary { background: #fff; border: 1px solid var(--border); color: var(--ink); flex: 1; }
 .btn-block { width: 100%; margin-top: 6px; padding: 12px; font-size: 14px; }
-.btn-danger { background: var(--red-bg); color: var(--red); border-radius: 10px; padding: 10px 14px; border: none; }
+.btn-danger { background: var(--red-bg); color: var(--red); border-radius: 10px; padding: 10px 14px; border: none; width: 40px; height: 40px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
+.btn-danger svg { width: 16px; height: 16px; }
 
 .card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 13px; margin-bottom: 10px; cursor: pointer; }
 .card-top { display: flex; justify-content: space-between; align-items: flex-start; }

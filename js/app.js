@@ -325,6 +325,7 @@ function viewNuevo() {
 
     <div class="section-block">
       <div class="block-title">${icon("package")} Máquinas a alquilar</div>
+      <div class="field"><label>Fecha de inicio (para todas las máquinas)</label><input type="date" id="f-startDate" value="${f.startDate}"></div>
       ${f.items.map((it, idx) => itemCardHTML(it, idx, f)).join("")}
       <button type="button" class="btn-mini" id="btn-add-item">${icon("plus")} Agregar otra máquina</button>
       ${state.machines.length === 0 ? `<div class="hint" style="margin-top:8px">Todavía no cargaste ninguna máquina.</div>` : ""}
@@ -337,7 +338,6 @@ function viewNuevo() {
         <div class="field"><label>Teléfono</label><input type="tel" id="f-clientPhone" value="${esc(f.clientPhone)}" placeholder="011-5555-5555"></div>
         <div class="field"><label>DNI</label><input type="text" id="f-clientDni" value="${esc(f.clientDni)}" placeholder="30111222"></div>
       </div>
-      <div class="field"><label>Fecha de inicio (para todas las máquinas)</label><input type="date" id="f-startDate" value="${f.startDate}"></div>
     </div>
 
     <div class="section-block">
