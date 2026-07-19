@@ -118,11 +118,21 @@ const state = {
 
 function freshRentalForm() {
   return {
-    machineId: "", clientName: "", clientPhone: "", clientDni: "",
-    periodType: "Día", periodCount: 1, unitPrice: 0, discount: 0,
+    items: [{ id: uid(), machineId: "" }],
+    clientName: "", clientPhone: "", clientDni: "",
+    periodType: "Día", periodCount: 1, discount: 0, // discount = porcentaje (ej: 10 = 10%)
     startDate: todayISO(), notes: "", dniPhoto: null, comprobantePhoto: null,
     showPresupuesto: false,
   };
+}
+
+// Cuántas unidades de esta máquina quedan libres, contando lo que ya está
+// reservado en otros renglones del mismo presupuesto (para no pasarse de stock).
+function remainingStock(machine, items, excludeItemId) {
+  const act = activeRentals();
+  const alquiladas = act.filter((r) => r.machineId === machine.id).length;
+  const reservadasEnForm = items.filter((it) => it.machineId === machine.id && it.id !== excludeItemId).length;
+  return machine.totalQty - alquiladas - reservadasEnForm;
 }
 
 function activeRentals() { return state.rentals.filter((r) => r.status === "Activo"); }
@@ -297,31 +307,42 @@ function viewMaquinas() {
 /* ===================== VISTA: NUEVO ALQUILER ===================== */
 function viewNuevo() {
   const f = state.nuevoAlquiler;
-  const machine = state.machines.find((m) => m.id === f.machineId);
-  const act = activeRentals();
-  const available = state.machines.filter((m) => {
-    const alquiladas = act.filter((r) => r.machineId === m.id).length;
-    return m.totalQty - alquiladas > 0;
+
+  // Recalcular precio unitario de cada renglón según la máquina y el período elegidos
+  f.items.forEach((it) => {
+    const m = state.machines.find((x) => x.id === it.machineId);
+    it.unitPrice = m ? priceForPeriod(m, f.periodType) : 0;
   });
 
-  f.unitPrice = machine ? priceForPeriod(machine, f.periodType) : 0;
-  const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-  const discount = Number(f.discount) || 0;
-  const total = Math.max(0, calcTotal - discount);
+  const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0), 0);
+  const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
+  const discountAmount = calcTotal * (discountPct / 100);
+  const total = Math.max(0, calcTotal - discountAmount);
   const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
 
   let html = `
     <div class="section-title tag-font">Nuevo alquiler</div>
-    <div class="section-sub">Cargá los datos del cliente y la máquina</div>
+    <div class="section-sub">Cargá los datos del cliente y las máquinas</div>
 
-    <div class="field">
-      <label>Máquina</label>
-      <select id="f-machine">
-        <option value="">Seleccioná una máquina...</option>
-        ${available.map((m) => `<option value="${m.id}" ${m.id === f.machineId ? "selected" : ""}>${esc(m.name)} (${esc(m.code)})</option>`).join("")}
-      </select>
+    <div class="section-block">
+      <div class="block-title">${icon("package")} Máquinas a alquilar</div>
+      ${f.items.map((it, idx) => {
+    const opciones = state.machines.filter((m) => remainingStock(m, f.items, it.id) > 0);
+    return `
+        <div class="field-row" style="align-items:center">
+          <div class="field" style="flex:1;margin-bottom:${idx === f.items.length - 1 ? "10px" : "10px"}">
+            <label>Máquina ${idx + 1}</label>
+            <select data-item-machine="${it.id}">
+              <option value="">Seleccioná una máquina...</option>
+              ${opciones.map((m) => `<option value="${m.id}" ${m.id === it.machineId ? "selected" : ""}>${esc(m.name)} (${esc(m.code)})</option>`).join("")}
+            </select>
+          </div>
+          ${f.items.length > 1 ? `<button type="button" class="btn-danger" data-remove-item="${it.id}" style="margin-bottom:10px">${icon("trash")}</button>` : ""}
+        </div>`;
+  }).join("")}
+      <button type="button" class="btn-mini" id="btn-add-item">${icon("plus")} Agregar otra máquina</button>
+      ${state.machines.length === 0 ? `<div class="hint" style="margin-top:8px">Todavía no cargaste ninguna máquina.</div>` : ""}
     </div>
-    ${state.machines.length > available.length ? `<div class="hint" style="color:var(--orange)">Algunas máquinas no aparecen porque no tienen stock disponible.</div>` : ""}
 
     <div class="section-block">
       <div class="block-title">${icon("id")} Datos del cliente</div>
@@ -342,22 +363,19 @@ function viewNuevo() {
         <div class="field"><label>Fecha de inicio</label><input type="date" id="f-startDate" value="${f.startDate}"></div>
       </div>
       <div class="hint" id="due-date-hint" style="margin-top:-2px">Devolución estimada: <b>${fmtDate(dueDate)}</b></div>
+      <div class="hint" style="margin-top:-2px">Se aplica la misma cantidad de ${f.periodType.toLowerCase()}s a todas las máquinas del presupuesto.</div>
     </div>
 
     <div class="section-block">
       <div class="block-title">${icon("wrench")} Precio</div>
-      <div class="field">
-        <label>Precio por ${f.periodType.toLowerCase()}</label>
-        <input type="number" id="f-unitPrice" value="${f.unitPrice || 0}" disabled>
-      </div>
-      <div class="hint" style="margin-top:-6px">${machine ? "Tomado automáticamente del precio cargado en la máquina." : "Elegí una máquina para ver su precio."}</div>
-      <div class="calc-line" id="calc-line">${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b></div>
-      <div class="field"><label>Descuento ($)</label><input type="number" min="0" id="f-discount" value="${f.discount || 0}" placeholder="0"></div>
+      <div id="items-price-list">${itemsPriceListHTML(f)}</div>
+      <div class="calc-line" id="calc-line">Subtotal: <b>${fmtMoney(calcTotal)}</b></div>
+      <div class="field"><label>Descuento (%)</label><input type="number" min="0" max="100" id="f-discount" value="${f.discount || 0}" placeholder="0"></div>
       <div class="field">
         <label>Total a cobrar</label>
         <input type="number" id="f-total" value="${total}" disabled style="font-weight:700">
       </div>
-      <div class="hint" style="margin-top:-4px">El total se calcula solo: precio × cantidad, menos el descuento que cargues arriba.</div>
+      <div class="hint" style="margin-top:-4px">El total se calcula solo: suma de cada máquina × sus períodos, menos el % de descuento que cargues.</div>
     </div>
 
     <div class="section-block">
@@ -372,7 +390,7 @@ function viewNuevo() {
 
     <div class="field"><label>Observaciones</label><textarea id="f-notes" rows="2" placeholder="Depósito, accesorios entregados, etc.">${esc(f.notes)}</textarea></div>
 
-    <div id="presupuesto-container">${f.showPresupuesto && machine ? presupuestoHTML(machine, f, total, dueDate) : ""}</div>
+    <div id="presupuesto-container">${f.showPresupuesto ? presupuestoHTML(f, total, dueDate) : ""}</div>
 
     <div class="action-row" style="margin-top:6px">
       <button class="btn btn-secondary" id="btn-presupuesto">${icon("file")} Presupuesto</button>
@@ -380,6 +398,20 @@ function viewNuevo() {
     </div>
   `;
   return html;
+}
+
+// Lista de renglones "Máquina — precio por período × cantidad = subtotal"
+function itemsPriceListHTML(f) {
+  const validos = f.items.filter((it) => it.machineId);
+  if (validos.length === 0) return `<div class="hint" style="margin-top:0">Elegí al menos una máquina para ver el precio.</div>`;
+  return validos.map((it) => itemPriceLineHTML(it, f)).join("");
+}
+
+function itemPriceLineHTML(it, f) {
+  const m = state.machines.find((x) => x.id === it.machineId);
+  if (!m) return "";
+  const lineTotal = (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0);
+  return `<div class="row-line" id="item-price-${it.id}"><span class="lab">${esc(m.name)} (${fmtMoney(it.unitPrice)}/${f.periodType.toLowerCase()})</span><span class="val">${f.periodCount || 0} × ${fmtMoney(it.unitPrice)} = <b>${fmtMoney(lineTotal)}</b></span></div>`;
 }
 
 function photoBox(key, label, iconName, photo) {
@@ -391,17 +423,23 @@ function photoBox(key, label, iconName, photo) {
     </div>`;
 }
 
-function presupuestoHTML(machine, f, total, dueDate) {
-  const discount = Number(f.discount) || 0;
+function presupuestoHTML(f, total, dueDate) {
+  const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
+  const validos = f.items.filter((it) => it.machineId);
+  const itemsHtml = validos.map((it) => {
+    const m = state.machines.find((x) => x.id === it.machineId);
+    if (!m) return "";
+    const lineTotal = (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0);
+    return `<div class="row-line"><span class="lab">${esc(m.name)} (${fmtMoney(it.unitPrice)}/${f.periodType.toLowerCase()})</span><span class="val">${fmtMoney(lineTotal)}</span></div>`;
+  }).join("");
   return `
     <div class="presupuesto">
       <div class="presupuesto-title tag-font">Presupuesto</div>
       <div class="presupuesto-date">Emitido el ${fmtDate(todayISO())}</div>
       <div class="row-line"><span class="lab">Cliente</span><span class="val">${esc(f.clientName) || "-"}</span></div>
-      <div class="row-line"><span class="lab">Máquina</span><span class="val">${esc(machine.name)}</span></div>
+      ${itemsHtml}
       <div class="row-line"><span class="lab">Período</span><span class="val">${f.periodCount} ${f.periodType.toLowerCase()}(s)</span></div>
-      <div class="row-line"><span class="lab">Precio unitario</span><span class="val">${fmtMoney(f.unitPrice)}</span></div>
-      ${discount ? `<div class="row-line"><span class="lab">Descuento</span><span class="val">-${fmtMoney(discount)}</span></div>` : ""}
+      ${discountPct ? `<div class="row-line"><span class="lab">Descuento</span><span class="val">${discountPct}%</span></div>` : ""}
       <div class="row-line"><span class="lab">Desde / hasta</span><span class="val">${fmtDate(f.startDate)} — ${fmtDate(dueDate)}</span></div>
       <div class="presupuesto-total"><span class="lab">Total</span><span class="val tag-font">${fmtMoney(total)}</span></div>
       <div class="presupuesto-foot">Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.</div>
@@ -486,10 +524,21 @@ function bindContentEvents() {
 function bindNuevoAlquiler() {
   const f = state.nuevoAlquiler;
 
-  document.getElementById("f-machine").addEventListener("change", (e) => {
-    f.machineId = e.target.value;
+  document.querySelectorAll("[data-item-machine]").forEach((sel) => sel.addEventListener("change", (e) => {
+    const item = f.items.find((it) => it.id === sel.dataset.itemMachine);
+    if (item) item.machineId = e.target.value;
+    renderContent();
+  }));
+
+  document.getElementById("btn-add-item")?.addEventListener("click", () => {
+    f.items.push({ id: uid(), machineId: "" });
     renderContent();
   });
+
+  document.querySelectorAll("[data-remove-item]").forEach((btn) => btn.addEventListener("click", () => {
+    f.items = f.items.filter((it) => it.id !== btn.dataset.removeItem);
+    renderContent();
+  }));
 
   document.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => {
     f.periodType = b.dataset.period;
@@ -540,25 +589,53 @@ function bindNuevoAlquiler() {
   document.getElementById("btn-confirmar").addEventListener("click", async () => {
     const err = validateNuevo();
     if (err) { alert(err); return; }
-    const machine = state.machines.find((m) => m.id === f.machineId);
-    const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-    const discount = Number(f.discount) || 0;
-    const total = Math.max(0, calcTotal - discount);
+
+    const validItems = f.items.filter((it) => it.machineId);
+    const calcTotal = validItems.reduce((sum, it) => {
+      const m = state.machines.find((x) => x.id === it.machineId);
+      const unitPrice = m ? priceForPeriod(m, f.periodType) : 0;
+      return sum + unitPrice * (Number(f.periodCount) || 0);
+    }, 0);
+    const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
     const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
-    const rental = {
-      id: uid(),
-      machineId: machine.id, machineName: machine.name, machineCode: machine.code,
-      clientName: f.clientName.trim(), clientPhone: f.clientPhone.trim(), clientDni: f.clientDni.trim(),
-      periodType: f.periodType, periodCount: Number(f.periodCount), unitPrice: Number(f.unitPrice) || 0,
-      discount, total, startDate: f.startDate, dueDate, status: "Activo", notes: f.notes.trim(),
-      hasDniPhoto: !!f.dniPhoto, hasComprobantePhoto: !!f.comprobantePhoto,
-      createdAt: new Date().toISOString(),
-    };
-    state.rentals.push(rental);
+
+    // Se crea un alquiler por cada máquina, repartiendo el descuento en proporción
+    // a lo que pesa cada máquina en el total (así el stock sigue contándose por máquina).
+    let discountAsignado = 0;
+    const nuevosRentals = [];
+    for (let i = 0; i < validItems.length; i++) {
+      const it = validItems[i];
+      const machine = state.machines.find((m) => m.id === it.machineId);
+      const unitPrice = priceForPeriod(machine, f.periodType);
+      const lineTotal = unitPrice * (Number(f.periodCount) || 0);
+      const lineDiscountAmount = calcTotal > 0 ? lineTotal * (discountPct / 100) : 0;
+      let itemDiscountAmount;
+      if (i === validItems.length - 1) {
+        itemDiscountAmount = calcTotal * (discountPct / 100) - discountAsignado;
+      } else {
+        itemDiscountAmount = Math.round(lineDiscountAmount);
+        discountAsignado += itemDiscountAmount;
+      }
+      const total = Math.max(0, Math.round(lineTotal - itemDiscountAmount));
+      nuevosRentals.push({
+        id: uid(),
+        machineId: machine.id, machineName: machine.name, machineCode: machine.code,
+        clientName: f.clientName.trim(), clientPhone: f.clientPhone.trim(), clientDni: f.clientDni.trim(),
+        periodType: f.periodType, periodCount: Number(f.periodCount), unitPrice,
+        discountPct, discount: Math.round(itemDiscountAmount), total,
+        startDate: f.startDate, dueDate, status: "Activo", notes: f.notes.trim(),
+        hasDniPhoto: !!f.dniPhoto, hasComprobantePhoto: !!f.comprobantePhoto,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    state.rentals.push(...nuevosRentals);
     saveRentals(state.rentals);
-    if (f.dniPhoto) await savePhoto("dni-" + rental.id, f.dniPhoto);
-    if (f.comprobantePhoto) await savePhoto("comp-" + rental.id, f.comprobantePhoto);
-    toast("Alquiler confirmado");
+    for (const rental of nuevosRentals) {
+      if (f.dniPhoto) await savePhoto("dni-" + rental.id, f.dniPhoto);
+      if (f.comprobantePhoto) await savePhoto("comp-" + rental.id, f.comprobantePhoto);
+    }
+    toast(nuevosRentals.length > 1 ? "Alquileres confirmados" : "Alquiler confirmado");
     state.nuevoAlquiler = freshRentalForm();
     state.tab = "alquileres";
     render();
@@ -568,29 +645,36 @@ function bindNuevoAlquiler() {
 function bindPresupuestoPdfButton() {
   const f = state.nuevoAlquiler;
   document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", () => {
-    const m = state.machines.find((x) => x.id === f.machineId);
-    if (!m) return;
-    const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-    const discount = Number(f.discount) || 0;
-    const total = Math.max(0, calcTotal - discount);
+    const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0), 0);
+    const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
+    const discountAmount = calcTotal * (discountPct / 100);
+    const total = Math.max(0, calcTotal - discountAmount);
     const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
-    generarPresupuestoPDF(m, f, total, dueDate, discount, calcTotal);
+    generarPresupuestoPDF(f, total, dueDate, discountPct, calcTotal);
   });
 }
 
-// Actualiza los números derivados (cálculo, total, fecha de devolución, presupuesto)
+// Actualiza los números derivados (renglones de precio, total, fecha de devolución, presupuesto)
 // sin volver a dibujar todo el formulario, para no perder el foco mientras se escribe.
 function updatePrecioDisplay() {
   const f = state.nuevoAlquiler;
-  const machine = state.machines.find((m) => m.id === f.machineId);
-  f.unitPrice = machine ? priceForPeriod(machine, f.periodType) : 0;
-  const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-  const discount = Number(f.discount) || 0;
-  const total = Math.max(0, calcTotal - discount);
+  f.items.forEach((it) => {
+    const m = state.machines.find((x) => x.id === it.machineId);
+    it.unitPrice = m ? priceForPeriod(m, f.periodType) : 0;
+  });
+  const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0), 0);
+  const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
+  const discountAmount = calcTotal * (discountPct / 100);
+  const total = Math.max(0, calcTotal - discountAmount);
   const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
 
+  f.items.filter((it) => it.machineId).forEach((it) => {
+    const lineEl = document.getElementById("item-price-" + it.id);
+    if (lineEl) lineEl.outerHTML = itemPriceLineHTML(it, f);
+  });
+
   const calcLineEl = document.getElementById("calc-line");
-  if (calcLineEl) calcLineEl.innerHTML = `${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b>`;
+  if (calcLineEl) calcLineEl.innerHTML = `Subtotal: <b>${fmtMoney(calcTotal)}</b>`;
 
   const totalEl = document.getElementById("f-total");
   if (totalEl) totalEl.value = total;
@@ -600,14 +684,14 @@ function updatePrecioDisplay() {
 
   const presupuestoCont = document.getElementById("presupuesto-container");
   if (presupuestoCont) {
-    presupuestoCont.innerHTML = f.showPresupuesto && machine ? presupuestoHTML(machine, f, total, dueDate) : "";
+    presupuestoCont.innerHTML = f.showPresupuesto ? presupuestoHTML(f, total, dueDate) : "";
     bindPresupuestoPdfButton();
   }
 }
 
 function validateNuevo() {
   const f = state.nuevoAlquiler;
-  if (!f.machineId) return "Elegí una máquina";
+  if (!f.items.some((it) => it.machineId)) return "Elegí al menos una máquina";
   if (!f.clientName.trim()) return "Ingresá el nombre del cliente";
   if (!f.periodCount || Number(f.periodCount) <= 0) return "Ingresá una cantidad de períodos válida";
   return null;
@@ -820,7 +904,7 @@ function closeModals() {
 }
 
 /* ===================== PRESUPUESTO (PDF) ===================== */
-function generarPresupuestoPDF(machine, f, total, dueDate, discount, calcTotal) {
+function generarPresupuestoPDF(f, total, dueDate, discountPct, calcTotal) {
   try {
     if (typeof window.jspdf === "undefined") {
       alert("No se pudo cargar el generador de PDF (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
@@ -855,16 +939,30 @@ function generarPresupuestoPDF(machine, f, total, dueDate, discount, calcTotal) 
 
     line("Cliente", f.clientName || "-");
     if (f.clientPhone) line("Teléfono", f.clientPhone);
-    line("Máquina", machine.name);
     line("Período", `${f.periodCount} ${f.periodType.toLowerCase()}(s)`);
-    line("Precio unitario", fmtMoney(f.unitPrice));
-    if (discount) line("Descuento", "-" + fmtMoney(discount));
-    line("Desde / hasta", `${fmtDate(f.startDate)} - ${fmtDate(dueDate)}`);
+
+    y += 2;
+    doc.setDrawColor(225);
+    doc.line(14, y, pageW - 14, y);
+    y += 7;
+
+    f.items.filter((it) => it.machineId).forEach((it) => {
+      const m = state.machines.find((x) => x.id === it.machineId);
+      if (!m) return;
+      const lineTotal = (Number(it.unitPrice) || 0) * (Number(f.periodCount) || 0);
+      line(`${m.name} (${fmtMoney(it.unitPrice)}/${f.periodType.toLowerCase()})`, fmtMoney(lineTotal));
+    });
 
     y += 2;
     doc.setDrawColor(210);
     doc.line(14, y, pageW - 14, y);
     y += 9;
+
+    if (discountPct) {
+      line("Subtotal", fmtMoney(calcTotal));
+      line("Descuento", `${discountPct}%`);
+      y += 2;
+    }
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(13);
@@ -967,7 +1065,8 @@ async function generarReporteAlquileres() {
       { header: "Período", key: "periodo", width: 10 },
       { header: "Cant. períodos", key: "cant", width: 12 },
       { header: "Precio unitario", key: "precio", width: 13 },
-      { header: "Descuento", key: "descuento", width: 12 },
+      { header: "Descuento %", key: "descuentoPct", width: 11 },
+      { header: "Descuento $", key: "descuento", width: 12 },
       { header: "Total", key: "total", width: 12 },
       { header: "Estado", key: "estado", width: 10 },
       { header: "Fecha devolución", key: "devolucion", width: 14 },
@@ -985,7 +1084,7 @@ async function generarReporteAlquileres() {
       wsDetalle.addRow({
         fecha: fmtDate((r.createdAt || "").split("T")[0]),
         maquina: r.machineName, codigo: r.machineCode || "", cliente: r.clientName, telefono: r.clientPhone || "",
-        periodo: r.periodType, cant: r.periodCount, precio: r.unitPrice, descuento: r.discount || 0, total: r.total,
+        periodo: r.periodType, cant: r.periodCount, precio: r.unitPrice, descuentoPct: r.discountPct || 0, descuento: r.discount || 0, total: r.total,
         estado: r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
         devolucion: fmtDate(r.dueDate), obs: r.notes || "",
       });
@@ -998,7 +1097,7 @@ async function generarReporteAlquileres() {
           const dataUrl = await getPhoto("dni-" + r.id);
           if (dataUrl) {
             const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
-            wsDetalle.addImage(imgId, { tl: { col: 13, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
+            wsDetalle.addImage(imgId, { tl: { col: 14, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
             hayFoto = true;
           }
         } catch (e) { console.error("No se pudo incluir la foto de DNI del alquiler " + r.id + ":", e); }
@@ -1008,7 +1107,7 @@ async function generarReporteAlquileres() {
           const dataUrl = await getPhoto("comp-" + r.id);
           if (dataUrl) {
             const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
-            wsDetalle.addImage(imgId, { tl: { col: 14, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
+            wsDetalle.addImage(imgId, { tl: { col: 15, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
             hayFoto = true;
           }
         } catch (e) { console.error("No se pudo incluir la foto del comprobante del alquiler " + r.id + ":", e); }
