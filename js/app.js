@@ -119,7 +119,7 @@ const state = {
 function freshRentalForm() {
   return {
     machineId: "", clientName: "", clientPhone: "", clientDni: "",
-    periodType: "Día", periodCount: 1, unitPrice: 0, totalOverride: null,
+    periodType: "Día", periodCount: 1, unitPrice: 0, discount: 0,
     startDate: todayISO(), notes: "", dniPhoto: null, comprobantePhoto: null,
     showPresupuesto: false,
   };
@@ -304,9 +304,10 @@ function viewNuevo() {
     return m.totalQty - alquiladas > 0;
   });
 
-  if (machine && f.unitPrice === null) f.unitPrice = priceForPeriod(machine, f.periodType);
+  f.unitPrice = machine ? priceForPeriod(machine, f.periodType) : 0;
   const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-  const total = f.totalOverride !== null ? f.totalOverride : calcTotal;
+  const discount = Number(f.discount) || 0;
+  const total = Math.max(0, calcTotal - discount);
   const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
 
   let html = `
@@ -345,10 +346,18 @@ function viewNuevo() {
 
     <div class="section-block">
       <div class="block-title">${icon("wrench")} Precio</div>
-      <div class="field"><label>Precio por ${f.periodType.toLowerCase()}</label><input type="number" id="f-unitPrice" value="${f.unitPrice || 0}"></div>
+      <div class="field">
+        <label>Precio por ${f.periodType.toLowerCase()}</label>
+        <input type="number" id="f-unitPrice" value="${f.unitPrice || 0}" disabled>
+      </div>
+      <div class="hint" style="margin-top:-6px">${machine ? "Tomado automáticamente del precio cargado en la máquina." : "Elegí una máquina para ver su precio."}</div>
       <div class="calc-line">${f.periodCount || 0} ${f.periodType.toLowerCase()}(s) &times; ${fmtMoney(f.unitPrice)} = <b>${fmtMoney(calcTotal)}</b></div>
-      <div class="field"><label>Total a cobrar (editable)</label><input type="number" id="f-total" value="${total}" style="font-weight:700"></div>
-      <div class="hint" style="margin-top:-4px">Se calcula solo multiplicando, pero podés pisar el total a mano si le hacés un descuento.</div>
+      <div class="field"><label>Descuento ($)</label><input type="number" min="0" id="f-discount" value="${f.discount || 0}" placeholder="0"></div>
+      <div class="field">
+        <label>Total a cobrar</label>
+        <input type="number" id="f-total" value="${total}" disabled style="font-weight:700">
+      </div>
+      <div class="hint" style="margin-top:-4px">El total se calcula solo: precio × cantidad, menos el descuento que cargues arriba.</div>
     </div>
 
     <div class="section-block">
@@ -383,6 +392,7 @@ function photoBox(key, label, iconName, photo) {
 }
 
 function presupuestoHTML(machine, f, total, dueDate) {
+  const discount = Number(f.discount) || 0;
   return `
     <div class="presupuesto">
       <div class="presupuesto-title tag-font">Presupuesto</div>
@@ -391,9 +401,11 @@ function presupuestoHTML(machine, f, total, dueDate) {
       <div class="row-line"><span class="lab">Máquina</span><span class="val">${esc(machine.name)}</span></div>
       <div class="row-line"><span class="lab">Período</span><span class="val">${f.periodCount} ${f.periodType.toLowerCase()}(s)</span></div>
       <div class="row-line"><span class="lab">Precio unitario</span><span class="val">${fmtMoney(f.unitPrice)}</span></div>
+      ${discount ? `<div class="row-line"><span class="lab">Descuento</span><span class="val">-${fmtMoney(discount)}</span></div>` : ""}
       <div class="row-line"><span class="lab">Desde / hasta</span><span class="val">${fmtDate(f.startDate)} — ${fmtDate(dueDate)}</span></div>
       <div class="presupuesto-total"><span class="lab">Total</span><span class="val tag-font">${fmtMoney(total)}</span></div>
       <div class="presupuesto-foot">Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.</div>
+      <button class="btn btn-primary btn-block" id="btn-presupuesto-pdf" style="margin-top:10px">${icon("share")} Compartir por WhatsApp (PDF)</button>
     </div>`;
 }
 
@@ -476,17 +488,11 @@ function bindNuevoAlquiler() {
 
   document.getElementById("f-machine").addEventListener("change", (e) => {
     f.machineId = e.target.value;
-    const m = state.machines.find((x) => x.id === f.machineId);
-    if (m) f.unitPrice = priceForPeriod(m, f.periodType);
-    f.totalOverride = null;
     renderContent();
   });
 
   document.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => {
     f.periodType = b.dataset.period;
-    const m = state.machines.find((x) => x.id === f.machineId);
-    if (m) f.unitPrice = priceForPeriod(m, f.periodType);
-    f.totalOverride = null;
     renderContent();
   }));
 
@@ -495,8 +501,7 @@ function bindNuevoAlquiler() {
   document.getElementById("f-clientDni").addEventListener("input", (e) => { f.clientDni = e.target.value; });
   document.getElementById("f-periodCount").addEventListener("input", (e) => { f.periodCount = e.target.value; syncTotals(); });
   document.getElementById("f-startDate").addEventListener("input", (e) => { f.startDate = e.target.value; syncTotals(); });
-  document.getElementById("f-unitPrice").addEventListener("input", (e) => { f.unitPrice = e.target.value; f.totalOverride = null; syncTotals(); });
-  document.getElementById("f-total").addEventListener("input", (e) => { f.totalOverride = Number(e.target.value); syncPresupuestoOnly(); });
+  document.getElementById("f-discount").addEventListener("input", (e) => { f.discount = e.target.value; syncTotals(); });
   document.getElementById("f-notes").addEventListener("input", (e) => { f.notes = e.target.value; });
 
   document.querySelectorAll("[data-photo-pick]").forEach((box) => box.addEventListener("click", () => {
@@ -530,19 +535,30 @@ function bindNuevoAlquiler() {
     renderContent();
   });
 
+  document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", () => {
+    const m = state.machines.find((x) => x.id === f.machineId);
+    if (!m) return;
+    const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
+    const discount = Number(f.discount) || 0;
+    const total = Math.max(0, calcTotal - discount);
+    const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
+    generarPresupuestoPDF(m, f, total, dueDate, discount, calcTotal);
+  });
+
   document.getElementById("btn-confirmar").addEventListener("click", async () => {
     const err = validateNuevo();
     if (err) { alert(err); return; }
     const machine = state.machines.find((m) => m.id === f.machineId);
     const calcTotal = (Number(f.unitPrice) || 0) * (Number(f.periodCount) || 0);
-    const total = f.totalOverride !== null ? f.totalOverride : calcTotal;
+    const discount = Number(f.discount) || 0;
+    const total = Math.max(0, calcTotal - discount);
     const dueDate = calcDueDate(f.startDate, f.periodType, f.periodCount);
     const rental = {
       id: uid(),
       machineId: machine.id, machineName: machine.name, machineCode: machine.code,
       clientName: f.clientName.trim(), clientPhone: f.clientPhone.trim(), clientDni: f.clientDni.trim(),
       periodType: f.periodType, periodCount: Number(f.periodCount), unitPrice: Number(f.unitPrice) || 0,
-      total, startDate: f.startDate, dueDate, status: "Activo", notes: f.notes.trim(),
+      discount, total, startDate: f.startDate, dueDate, status: "Activo", notes: f.notes.trim(),
       hasDniPhoto: !!f.dniPhoto, hasComprobantePhoto: !!f.comprobantePhoto,
       createdAt: new Date().toISOString(),
     };
@@ -558,10 +574,6 @@ function bindNuevoAlquiler() {
 }
 
 function syncTotals() { renderContent(); }
-function syncPresupuestoOnly() {
-  // solo re-renderiza el bloque de presupuesto si está visible, sin perder foco de otros inputs
-  if (state.nuevoAlquiler.showPresupuesto) renderContent();
-}
 
 function validateNuevo() {
   const f = state.nuevoAlquiler;
@@ -777,6 +789,88 @@ function closeModals() {
   renderModals();
 }
 
+/* ===================== PRESUPUESTO (PDF) ===================== */
+function generarPresupuestoPDF(machine, f, total, dueDate, discount, calcTotal) {
+  try {
+    if (typeof window.jspdf === "undefined") {
+      alert("No se pudo cargar el generador de PDF (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
+      return;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: "mm", format: "a5" });
+    const pageW = doc.internal.pageSize.getWidth();
+    let y = 18;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text("PRESUPUESTO", pageW / 2, y, { align: "center" });
+    y += 6;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(`Emitido el ${fmtDate(todayISO())}`, pageW / 2, y, { align: "center" });
+    doc.setTextColor(20);
+    y += 10;
+
+    const line = (label, value, bold) => {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      doc.setTextColor(110);
+      doc.text(label, 14, y);
+      doc.setTextColor(20);
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+      doc.text(String(value), pageW - 14, y, { align: "right" });
+      y += 7;
+    };
+
+    line("Cliente", f.clientName || "-");
+    if (f.clientPhone) line("Teléfono", f.clientPhone);
+    line("Máquina", machine.name);
+    line("Período", `${f.periodCount} ${f.periodType.toLowerCase()}(s)`);
+    line("Precio unitario", fmtMoney(f.unitPrice));
+    if (discount) line("Descuento", "-" + fmtMoney(discount));
+    line("Desde / hasta", `${fmtDate(f.startDate)} - ${fmtDate(dueDate)}`);
+
+    y += 2;
+    doc.setDrawColor(210);
+    doc.line(14, y, pageW - 14, y);
+    y += 9;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text("Total", 14, y);
+    doc.setFontSize(16);
+    doc.text(fmtMoney(total), pageW - 14, y, { align: "right" });
+    y += 12;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(130);
+    doc.text("Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.", 14, y, { maxWidth: pageW - 28 });
+
+    const filename = `Presupuesto_${(f.clientName || "cliente").trim().replace(/\s+/g, "_") || "cliente"}_${todayISO()}.pdf`;
+    const blob = doc.output("blob");
+    compartirArchivo(blob, filename, "application/pdf", "PDF");
+  } catch (err) {
+    console.error("Error generando el presupuesto en PDF:", err);
+    alert("Hubo un problema generando el PDF: " + (err && err.message ? err.message : err));
+  }
+}
+
+async function compartirArchivo(blob, filename, mimeType, label) {
+  try {
+    const file = new File([blob], filename, { type: mimeType });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    }
+  } catch (err) {
+    if (err && err.name === "AbortError") return; // el usuario cerró el selector de compartir
+    console.error("No se pudo abrir el selector de compartir, se ofrece descarga:", err);
+  }
+  presentReport(blob, filename, label);
+}
+
 /* ===================== REPORTES (EXCEL) ===================== */
 function getWeekStart(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
@@ -893,18 +987,18 @@ function generarReporteStock() {
   }
 }
 
-function presentReport(blob, filename) {
+function presentReport(blob, filename, label = "Excel") {
   const url = URL.createObjectURL(blob);
   const root = document.getElementById("modal-root");
   root.innerHTML = `
     <div class="modal-overlay" id="overlay">
       <div class="modal">
         <div class="modal-head">
-          <div class="modal-title tag-font">Reporte listo</div>
+          <div class="modal-title tag-font">${label === "PDF" ? "Presupuesto listo" : "Reporte listo"}</div>
           <button class="modal-close" id="close-modal">${icon("x")}</button>
         </div>
         <div class="hint" style="margin-top:0">${esc(filename)}</div>
-        <a class="btn btn-primary btn-block" id="btn-download-report" href="${url}" download="${filename}" style="margin-top:10px;text-decoration:none">${icon("file")} Descargar Excel</a>
+        <a class="btn btn-primary btn-block" id="btn-download-report" href="${url}" download="${filename}" style="margin-top:10px;text-decoration:none">${icon("file")} Descargar ${label}</a>
         <div class="hint" style="margin-top:10px">Se guarda en tus Descargas. Desde ahí lo podés adjuntar en WhatsApp como cualquier otro archivo.</div>
       </div>
     </div>`;
