@@ -436,7 +436,7 @@ function presupuestoHTML(f, total) {
       ${itemsHtml}
       ${discountPct ? `<div class="row-line"><span class="lab">Descuento</span><span class="val">${discountPct}%</span></div>` : ""}
       <div class="presupuesto-total"><span class="lab">Total</span><span class="val tag-font">${fmtMoney(total)}</span></div>
-      <div class="presupuesto-foot">Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.</div>
+      <div class="presupuesto-foot">Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.<br><b>Válido hasta el ${fmtDate(addDays(todayISO(), 7))}.</b> Pasada esa fecha hay que pedirlo de nuevo, ya que los precios pueden cambiar.</div>
       <button class="btn btn-primary btn-block" id="btn-presupuesto-pdf" style="margin-top:10px">${icon("share")} Compartir por WhatsApp (PDF)</button>
     </div>`;
 }
@@ -980,6 +980,13 @@ function generarPresupuestoPDF(f, total, discountPct, calcTotal) {
     doc.setFontSize(8.5);
     doc.setTextColor(130);
     doc.text("Presupuesto sin cargo. No implica reserva de la máquina hasta confirmar el alquiler.", 14, y, { maxWidth: pageW - 28 });
+    y += 8;
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(90);
+    doc.text(`Válido hasta el ${fmtDate(addDays(todayISO(), 7))}.`, 14, y, { maxWidth: pageW - 28 });
+    y += 5;
+    doc.setFont("helvetica", "normal");
+    doc.text("Pasada esa fecha hay que pedirlo de nuevo, ya que los precios pueden cambiar.", 14, y, { maxWidth: pageW - 28 });
 
     const filename = `Presupuesto_${(f.clientName || "cliente").trim().replace(/\s+/g, "_") || "cliente"}_${todayISO()}.pdf`;
     const blob = doc.output("blob");
