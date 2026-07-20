@@ -44,11 +44,9 @@ svg { width: 100%; height: 100%; }
 .header-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .header-logo {
-  background: var(--yellow); width: 36px; height: 36px; border-radius: 8px;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-  color: var(--ink);
+  height: 36px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.header-logo svg { width: 20px; height: 20px; }
+.header-logo img { height: 100%; width: auto; object-fit: contain; }
 .header-title { color: #fff; font-size: 19px; font-weight: 600; line-height: 1.15; }
 .header-sub { color: #9CA0A6; font-size: 11.5px; margin-top: 2px; }
 

@@ -153,7 +153,7 @@ function render() {
       <div class="header">
         <div class="header-row">
           <div class="header-left">
-            <div class="header-logo">${icon("wrench")}</div>
+            <div class="header-logo"><img src="icons/logo.png" alt="Logo"></div>
             <div style="min-width:0">
               <div class="header-title tag-font">ALQUILER DE HERRAMIENTAS</div>
               <div class="header-sub">Control de stock y clientes</div>
@@ -429,6 +429,7 @@ function presupuestoHTML(f, total) {
   }).join("");
   return `
     <div class="presupuesto">
+      <img src="icons/logo.png" alt="Logo" style="height:32px;display:block;margin:0 auto 10px">
       <div class="presupuesto-title tag-font">Presupuesto</div>
       <div class="presupuesto-date">Emitido el ${fmtDate(todayISO())}</div>
       <div class="row-line"><span class="lab">Cliente</span><span class="val">${esc(f.clientName) || "-"}</span></div>
@@ -645,12 +646,12 @@ function bindNuevoAlquiler() {
 
 function bindPresupuestoPdfButton() {
   const f = state.nuevoAlquiler;
-  document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", () => {
+  document.getElementById("btn-presupuesto-pdf")?.addEventListener("click", async () => {
     const calcTotal = f.items.reduce((sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(it.periodCount) || 0), 0);
     const discountPct = Math.min(100, Math.max(0, Number(f.discount) || 0));
     const discountAmount = calcTotal * (discountPct / 100);
     const total = Math.max(0, calcTotal - discountAmount);
-    generarPresupuestoPDF(f, total, discountPct, calcTotal);
+    await generarPresupuestoPDF(f, total, discountPct, calcTotal);
   });
 }
 
@@ -902,7 +903,27 @@ function closeModals() {
 }
 
 /* ===================== PRESUPUESTO (PDF) ===================== */
-function generarPresupuestoPDF(f, total, discountPct, calcTotal) {
+// Carga icons/logo.png como data URL una sola vez y lo reutiliza (para incrustarlo en el PDF)
+let logoDataUrlCache = null;
+async function getLogoDataUrl() {
+  if (logoDataUrlCache) return logoDataUrlCache;
+  try {
+    const resp = await fetch("icons/logo.png");
+    const blob = await resp.blob();
+    logoDataUrlCache = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.error("No se pudo cargar el logo para el PDF:", e);
+    logoDataUrlCache = null;
+  }
+  return logoDataUrlCache;
+}
+
+async function generarPresupuestoPDF(f, total, discountPct, calcTotal) {
   try {
     if (typeof window.jspdf === "undefined") {
       alert("No se pudo cargar el generador de PDF (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
@@ -911,7 +932,15 @@ function generarPresupuestoPDF(f, total, discountPct, calcTotal) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: "mm", format: "a5" });
     const pageW = doc.internal.pageSize.getWidth();
-    let y = 18;
+    let y = 14;
+
+    const logo = await getLogoDataUrl();
+    if (logo) {
+      const logoW = 42;
+      const logoH = logoW / 2.913; // relación de aspecto real del logo (268x92)
+      doc.addImage(logo, "PNG", (pageW - logoW) / 2, y, logoW, logoH);
+      y += logoH + 8;
+    }
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(16);
