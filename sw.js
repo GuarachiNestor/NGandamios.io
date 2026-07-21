@@ -1,4 +1,4 @@
-const CACHE_NAME = "alquiler-hta-v9";
+const CACHE_NAME = "alquiler-hta-v10";
 const ASSETS = [
     "./",
     "./index.html",

@@ -118,7 +118,12 @@ async function deletePhoto(key) {
 const GOOGLE_CLIENT_ID = "1042664850210-9gc6c389nst5dl6v9t0sddhoulp2c487.apps.googleusercontent.com";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const DRIVE_BACKUP_FILENAME = "AlquilerHerramientas_backup.json";
+const DRIVE_REPORTS_FOLDER_NAME = "Alquiler Herramientas - Reportes";
+const DRIVE_REPORT_ALQUILERES_FILENAME = "Reporte_Alquileres.xlsx";
+const DRIVE_REPORT_STOCK_FILENAME = "Reporte_Stock.xlsx";
 const LS_DRIVE_SIGNED_IN = "ah_drive_signed_in";
+const LS_DRIVE_REPORTS_FOLDER_ID = "ah_drive_reports_folder_id";
+const LS_DRIVE_REPORTS_FOLDER_LINK = "ah_drive_reports_folder_link";
 
 const driveSync = {
   tokenClient: null,
@@ -130,6 +135,14 @@ const driveSync = {
   lastSyncAt: null,
   fileId: null,
   saveTimer: null,
+  // --- reportes compartidos (Excel) ---
+  reportsFolderId: localStorage.getItem(LS_DRIVE_REPORTS_FOLDER_ID) || null,
+  reportsFolderLink: localStorage.getItem(LS_DRIVE_REPORTS_FOLDER_LINK) || null,
+  reportsFileIds: { alquileres: null, stock: null },
+  reportsSyncing: false,
+  reportsLastSyncAt: null,
+  reportsSaveTimer: null,
+  reportsLastError: null,
 };
 let isRestoringFromDrive = false;
 
@@ -163,7 +176,10 @@ function handleTokenResponse(resp) {
   driveSync.signedIn = true;
   localStorage.setItem(LS_DRIVE_SIGNED_IN, "1");
   updateDriveStatusUI();
-  if (eraLogin) restoreFromDriveIfNeeded();
+  if (eraLogin) {
+    restoreFromDriveIfNeeded();
+    setTimeout(() => syncReportsToDrive(false), 1500);
+  }
 }
 
 function signInGoogle() {
@@ -181,6 +197,9 @@ function signOutGoogle() {
   driveSync.accessToken = null;
   driveSync.signedIn = false;
   driveSync.fileId = null;
+  driveSync.reportsFileIds = { alquileres: null, stock: null };
+  driveSync.reportsLastSyncAt = null;
+  driveSync.reportsLastError = null;
   localStorage.removeItem(LS_DRIVE_SIGNED_IN);
   updateDriveStatusUI();
   toast("Sesión de Google cerrada");
@@ -229,8 +248,8 @@ async function collectBackupPayload() {
 function scheduleAutoSync(immediate) {
   if (!driveSync.signedIn || isRestoringFromDrive) return;
   clearTimeout(driveSync.saveTimer);
-  if (immediate) { uploadBackupToDrive(); return; }
-  driveSync.saveTimer = setTimeout(uploadBackupToDrive, 2500);
+  if (immediate) { uploadBackupToDrive(); } else { driveSync.saveTimer = setTimeout(uploadBackupToDrive, 2500); }
+  scheduleReportsAutoSync(immediate);
 }
 
 async function uploadBackupToDrive() {
@@ -260,6 +279,131 @@ async function uploadBackupToDrive() {
     console.error("Error subiendo el respaldo a Drive:", err);
   } finally {
     driveSync.syncing = false;
+    updateDriveStatusUI();
+  }
+}
+
+/* ---- Carpeta compartida de Drive con los reportes Excel (Alquileres y Stock) ---- */
+// Busca en Drive la carpeta guardada; si ya no existe (por ej. se cerró sesión con otra
+// cuenta), la vuelve a crear. La carpeta queda visible en "Mi unidad" del usuario para
+// que la comparta una sola vez con quien necesite ver los reportes.
+async function driveEnsureReportsFolder(token) {
+  if (driveSync.reportsFolderId) {
+    const check = await fetch(`https://www.googleapis.com/drive/v3/files/${driveSync.reportsFolderId}?fields=id,trashed`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (check.ok) {
+      const data = await check.json();
+      if (!data.trashed) return driveSync.reportsFolderId;
+    }
+    driveSync.reportsFolderId = null;
+  }
+
+  const q = encodeURIComponent(`name='${DRIVE_REPORTS_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const searchResp = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const searchData = await searchResp.json();
+  if (searchData.files && searchData.files.length > 0) {
+    driveSync.reportsFolderId = searchData.files[0].id;
+  } else {
+    const createResp = await fetch("https://www.googleapis.com/drive/v3/files", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: DRIVE_REPORTS_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+    });
+    const createData = await createResp.json();
+    driveSync.reportsFolderId = createData.id;
+  }
+  localStorage.setItem(LS_DRIVE_REPORTS_FOLDER_ID, driveSync.reportsFolderId);
+
+  // Guardamos el link directo a la carpeta para mostrarlo en la app.
+  const linkResp = await fetch(`https://www.googleapis.com/drive/v3/files/${driveSync.reportsFolderId}?fields=webViewLink`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const linkData = await linkResp.json();
+  if (linkData.webViewLink) {
+    driveSync.reportsFolderLink = linkData.webViewLink;
+    localStorage.setItem(LS_DRIVE_REPORTS_FOLDER_LINK, linkData.webViewLink);
+  }
+  return driveSync.reportsFolderId;
+}
+
+async function driveFindFileInFolder(token, filename, folderId) {
+  const q = encodeURIComponent(`name='${filename}' and '${folderId}' in parents and trashed=false`);
+  const resp = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await resp.json();
+  return (data.files && data.files.length > 0) ? data.files[0].id : null;
+}
+
+// Sube un archivo binario (el .xlsx) a Drive. Usa Blob para armar el cuerpo multipart
+// en vez de concatenar texto, porque un xlsx es binario y concatenarlo como string
+// (como se hace con el respaldo JSON) corrompería el archivo.
+async function driveUploadBinaryFile(token, filename, blob, mimeType, folderId, existingFileId) {
+  const metadata = existingFileId ? { name: filename } : { name: filename, mimeType, parents: [folderId] };
+  const boundary = "ahboundary" + Date.now() + Math.random().toString(36).slice(2);
+  const metaPart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`;
+  const filePartHeader = `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`;
+  const closeDelim = `\r\n--${boundary}--`;
+  const multipartBody = new Blob([metaPart, filePartHeader, blob, closeDelim]);
+
+  const url = existingFileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
+    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+  const resp = await fetch(url, {
+    method: existingFileId ? "PATCH" : "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+    body: multipartBody,
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error((data.error && data.error.message) || "Error subiendo el archivo a Drive");
+  return data.id;
+}
+
+function scheduleReportsAutoSync(immediate) {
+  if (!driveSync.signedIn || isRestoringFromDrive) return;
+  clearTimeout(driveSync.reportsSaveTimer);
+  if (immediate) { syncReportsToDrive(false); return; }
+  driveSync.reportsSaveTimer = setTimeout(() => syncReportsToDrive(false), 2500);
+}
+
+// manual=true cuando lo dispara el botón "Actualizar reportes ahora" (muestra toasts/alerts).
+// manual=false cuando lo dispara el autosync en segundo plano (falla en silencio, solo consola).
+async function syncReportsToDrive(manual) {
+  if (!driveSync.signedIn) {
+    if (manual) alert("Iniciá sesión con Google (arriba, en Inicio) para poder compartir los reportes.");
+    return;
+  }
+  driveSync.reportsSyncing = true;
+  driveSync.reportsLastError = null;
+  updateDriveStatusUI();
+  try {
+    const token = await ensureAccessToken();
+    const folderId = await driveEnsureReportsFolder(token);
+
+    let alquileresBlob = null, stockBlob = null;
+    try { alquileresBlob = await construirBlobReporteAlquileres(); } catch (e) { if (e.message !== "SIN_DATOS_ALQUILERES") throw e; }
+    try { stockBlob = construirBlobReporteStock(); } catch (e) { if (e.message !== "SIN_DATOS_STOCK") throw e; }
+
+    if (alquileresBlob) {
+      const existingId = driveSync.reportsFileIds.alquileres || await driveFindFileInFolder(token, DRIVE_REPORT_ALQUILERES_FILENAME, folderId);
+      driveSync.reportsFileIds.alquileres = await driveUploadBinaryFile(token, DRIVE_REPORT_ALQUILERES_FILENAME, alquileresBlob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", folderId, existingId);
+    }
+    if (stockBlob) {
+      const existingId = driveSync.reportsFileIds.stock || await driveFindFileInFolder(token, DRIVE_REPORT_STOCK_FILENAME, folderId);
+      driveSync.reportsFileIds.stock = await driveUploadBinaryFile(token, DRIVE_REPORT_STOCK_FILENAME, stockBlob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", folderId, existingId);
+    }
+
+    driveSync.reportsLastSyncAt = new Date();
+    if (manual) toast("Reportes actualizados en Drive");
+  } catch (err) {
+    console.error("Error subiendo los reportes a Drive:", err);
+    driveSync.reportsLastError = (err && err.message) || String(err);
+    if (manual) alert("No se pudieron subir los reportes: " + driveSync.reportsLastError);
+  } finally {
+    driveSync.reportsSyncing = false;
     updateDriveStatusUI();
   }
 }
@@ -329,15 +473,38 @@ function driveSyncBlockHTML() {
     <button class="btn-mini" id="btn-google-signout">Cerrar sesión de Google</button>`;
 }
 
+function driveReportsBlockHTML() {
+  if (!driveSync.signedIn) {
+    return `
+      <div class="block-title">${icon("file")} Reportes compartidos (Excel)</div>
+      <div class="hint" style="margin-top:0">Iniciá sesión con Google arriba para que los reportes de Alquileres y Stock se guarden solos en una carpeta de Drive, lista para compartir.</div>`;
+  }
+  let estado;
+  if (driveSync.reportsSyncing) estado = "Actualizando reportes...";
+  else if (driveSync.reportsLastError) estado = `No se pudo actualizar: ${driveSync.reportsLastError}`;
+  else if (driveSync.reportsLastSyncAt) estado = `Actualizados ${fmtRelativeTime(driveSync.reportsLastSyncAt)}`;
+  else estado = "Todavía no se subieron (tocá el botón o esperá al próximo cambio)";
+
+  return `
+    <div class="block-title">${icon("file")} Reportes compartidos (Excel)</div>
+    <div class="hint" style="margin-top:0" id="drive-reports-state">${estado}</div>
+    ${driveSync.reportsFolderLink ? `<a href="${driveSync.reportsFolderLink}" target="_blank" rel="noopener" class="hint" style="display:block;margin-top:0;margin-bottom:8px">Abrir carpeta en Drive →</a>` : `<div class="hint" style="margin-top:0">La carpeta "${DRIVE_REPORTS_FOLDER_NAME}" se crea sola en tu Drive la primera vez que se suban los reportes.</div>`}
+    <button class="btn btn-secondary btn-block" id="btn-forzar-reportes" style="margin-top:0">${icon("file")} Actualizar reportes ahora</button>
+    <div class="hint" style="margin-top:8px;margin-bottom:0">Compartí esa carpeta una sola vez (clic derecho → Compartir) con quien necesite ver los reportes, sin entrar a la app.</div>`;
+}
+
 function updateDriveStatusUI() {
   const block = document.getElementById("drive-sync-block");
   if (block) block.innerHTML = driveSyncBlockHTML();
+  const reportsBlock = document.getElementById("drive-reports-block");
+  if (reportsBlock) reportsBlock.innerHTML = driveReportsBlockHTML();
   bindDriveSyncButtons();
 }
 
 function bindDriveSyncButtons() {
   document.getElementById("btn-google-signin")?.addEventListener("click", signInGoogle);
   document.getElementById("btn-google-signout")?.addEventListener("click", signOutGoogle);
+  document.getElementById("btn-forzar-reportes")?.addEventListener("click", () => syncReportsToDrive(true));
 }
 
 /* ===================== ESTADO ===================== */
@@ -448,6 +615,7 @@ function viewInicio() {
     <div class="section-title tag-font">Inicio</div>
     <div class="section-sub">Resumen general del local</div>
     <div class="section-block" id="drive-sync-block">${driveSyncBlockHTML()}</div>
+    <div class="section-block" id="drive-reports-block">${driveReportsBlockHTML()}</div>
     <div class="stat-grid">
       ${statCard("Máquinas", state.machines.length, "package", "var(--ink)")}
       ${statCard("Disponibles", totalDisponibles, "check", "var(--green)")}
@@ -1291,148 +1459,146 @@ function addDays(dateStr, n) {
   return d.toISOString().split("T")[0];
 }
 
+async function construirBlobReporteAlquileres() {
+  if (typeof ExcelJS === "undefined") throw new Error("No se pudo cargar el generador de Excel (necesita internet la primera vez).");
+  if (state.rentals.length === 0) throw new Error("SIN_DATOS_ALQUILERES");
+
+  // --- Agrupar por semana (lunes a domingo) según fecha de carga ---
+  const weekMap = {};
+  state.rentals.forEach((r) => {
+    const d = (r.createdAt || "").split("T")[0] || todayISO();
+    const weekStart = getWeekStart(d);
+    if (!weekMap[weekStart]) weekMap[weekStart] = { count: 0, total: 0 };
+    weekMap[weekStart].count += 1;
+    weekMap[weekStart].total += Number(r.total) || 0;
+  });
+  const weekKeys = Object.keys(weekMap).sort();
+  const totalGeneral = state.rentals.reduce((s, r) => s + (Number(r.total) || 0), 0);
+
+  const wb = new ExcelJS.Workbook();
+
+  // --- Hoja 1: resumen semanal ---
+  const wsResumen = wb.addWorksheet("Ganado por semana");
+  wsResumen.columns = [
+    { header: "Semana", key: "semana", width: 26 },
+    { header: "Cantidad de alquileres", key: "cant", width: 20 },
+    { header: "Monto ganado", key: "monto", width: 16 },
+  ];
+  wsResumen.getRow(1).font = { bold: true };
+  weekKeys.forEach((wk) => {
+    const info = weekMap[wk];
+    wsResumen.addRow({ semana: `${fmtDate(wk)} al ${fmtDate(addDays(wk, 6))}`, cant: info.count, monto: info.total });
+  });
+  wsResumen.addRow({});
+  wsResumen.addRow({ semana: "TOTAL GENERAL", cant: state.rentals.length, monto: totalGeneral });
+
+  // --- Hoja 2: detalle de cada alquiler, con descuento, observaciones y fotos ---
+  const wsDetalle = wb.addWorksheet("Detalle alquileres");
+  wsDetalle.columns = [
+    { header: "Fecha carga", key: "fecha", width: 12 },
+    { header: "Máquina", key: "maquina", width: 24 },
+    { header: "Código", key: "codigo", width: 10 },
+    { header: "Cliente", key: "cliente", width: 20 },
+    { header: "Teléfono", key: "telefono", width: 15 },
+    { header: "Período", key: "periodo", width: 10 },
+    { header: "Cant. períodos", key: "cant", width: 12 },
+    { header: "Precio unitario", key: "precio", width: 13 },
+    { header: "Descuento %", key: "descuentoPct", width: 11 },
+    { header: "Descuento $", key: "descuento", width: 12 },
+    { header: "Total", key: "total", width: 12 },
+    { header: "Estado", key: "estado", width: 10 },
+    { header: "Fecha devolución", key: "devolucion", width: 14 },
+    { header: "Observaciones", key: "obs", width: 32 },
+    { header: "Foto DNI", key: "fotoDni", width: 14 },
+    { header: "Foto comprobante", key: "fotoComp", width: 14 },
+  ];
+  wsDetalle.getRow(1).font = { bold: true };
+
+  const rentalsOrdenados = [...state.rentals].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+
+  for (let i = 0; i < rentalsOrdenados.length; i++) {
+    const r = rentalsOrdenados[i];
+    const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
+    wsDetalle.addRow({
+      fecha: fmtDate((r.createdAt || "").split("T")[0]),
+      maquina: r.machineName, codigo: r.machineCode || "", cliente: r.clientName, telefono: r.clientPhone || "",
+      periodo: r.periodType, cant: r.periodCount, precio: r.unitPrice, descuentoPct: r.discountPct || 0, descuento: r.discount || 0, total: r.total,
+      estado: r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
+      devolucion: fmtDate(r.dueDate), obs: r.notes || "",
+    });
+
+    const excelRow = i + 2; // la fila 1 es el encabezado
+    let hayFoto = false;
+
+    if (r.hasDniPhoto) {
+      try {
+        const dataUrl = await getPhoto("dni-" + r.id);
+        if (dataUrl) {
+          const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
+          wsDetalle.addImage(imgId, { tl: { col: 14, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
+          hayFoto = true;
+        }
+      } catch (e) { console.error("No se pudo incluir la foto de DNI del alquiler " + r.id + ":", e); }
+    }
+    if (r.hasComprobantePhoto) {
+      try {
+        const dataUrl = await getPhoto("comp-" + r.id);
+        if (dataUrl) {
+          const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
+          wsDetalle.addImage(imgId, { tl: { col: 15, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
+          hayFoto = true;
+        }
+      } catch (e) { console.error("No se pudo incluir la foto del comprobante del alquiler " + r.id + ":", e); }
+    }
+    if (hayFoto) wsDetalle.getRow(excelRow).height = 44;
+  }
+
+  const buf = await wb.xlsx.writeBuffer();
+  return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
 async function generarReporteAlquileres() {
   try {
-    if (typeof ExcelJS === "undefined") {
-      alert("No se pudo cargar el generador de Excel (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
-      return;
-    }
-    if (state.rentals.length === 0) {
-      alert("Todavía no hay ningún alquiler cargado.");
-      return;
-    }
     toast("Generando reporte... si hay muchas fotos puede tardar unos segundos.");
-
-    // --- Agrupar por semana (lunes a domingo) según fecha de carga ---
-    const weekMap = {};
-    state.rentals.forEach((r) => {
-      const d = (r.createdAt || "").split("T")[0] || todayISO();
-      const weekStart = getWeekStart(d);
-      if (!weekMap[weekStart]) weekMap[weekStart] = { count: 0, total: 0 };
-      weekMap[weekStart].count += 1;
-      weekMap[weekStart].total += Number(r.total) || 0;
-    });
-    const weekKeys = Object.keys(weekMap).sort();
-    const totalGeneral = state.rentals.reduce((s, r) => s + (Number(r.total) || 0), 0);
-
-    const wb = new ExcelJS.Workbook();
-
-    // --- Hoja 1: resumen semanal ---
-    const wsResumen = wb.addWorksheet("Ganado por semana");
-    wsResumen.columns = [
-      { header: "Semana", key: "semana", width: 26 },
-      { header: "Cantidad de alquileres", key: "cant", width: 20 },
-      { header: "Monto ganado", key: "monto", width: 16 },
-    ];
-    wsResumen.getRow(1).font = { bold: true };
-    weekKeys.forEach((wk) => {
-      const info = weekMap[wk];
-      wsResumen.addRow({ semana: `${fmtDate(wk)} al ${fmtDate(addDays(wk, 6))}`, cant: info.count, monto: info.total });
-    });
-    wsResumen.addRow({});
-    wsResumen.addRow({ semana: "TOTAL GENERAL", cant: state.rentals.length, monto: totalGeneral });
-
-    // --- Hoja 2: detalle de cada alquiler, con descuento, observaciones y fotos ---
-    const wsDetalle = wb.addWorksheet("Detalle alquileres");
-    wsDetalle.columns = [
-      { header: "Fecha carga", key: "fecha", width: 12 },
-      { header: "Máquina", key: "maquina", width: 24 },
-      { header: "Código", key: "codigo", width: 10 },
-      { header: "Cliente", key: "cliente", width: 20 },
-      { header: "Teléfono", key: "telefono", width: 15 },
-      { header: "Período", key: "periodo", width: 10 },
-      { header: "Cant. períodos", key: "cant", width: 12 },
-      { header: "Precio unitario", key: "precio", width: 13 },
-      { header: "Descuento %", key: "descuentoPct", width: 11 },
-      { header: "Descuento $", key: "descuento", width: 12 },
-      { header: "Total", key: "total", width: 12 },
-      { header: "Estado", key: "estado", width: 10 },
-      { header: "Fecha devolución", key: "devolucion", width: 14 },
-      { header: "Observaciones", key: "obs", width: 32 },
-      { header: "Foto DNI", key: "fotoDni", width: 14 },
-      { header: "Foto comprobante", key: "fotoComp", width: 14 },
-    ];
-    wsDetalle.getRow(1).font = { bold: true };
-
-    const rentalsOrdenados = [...state.rentals].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
-
-    for (let i = 0; i < rentalsOrdenados.length; i++) {
-      const r = rentalsOrdenados[i];
-      const isOverdue = r.status === "Activo" && r.dueDate < todayISO();
-      wsDetalle.addRow({
-        fecha: fmtDate((r.createdAt || "").split("T")[0]),
-        maquina: r.machineName, codigo: r.machineCode || "", cliente: r.clientName, telefono: r.clientPhone || "",
-        periodo: r.periodType, cant: r.periodCount, precio: r.unitPrice, descuentoPct: r.discountPct || 0, descuento: r.discount || 0, total: r.total,
-        estado: r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo",
-        devolucion: fmtDate(r.dueDate), obs: r.notes || "",
-      });
-
-      const excelRow = i + 2; // la fila 1 es el encabezado
-      let hayFoto = false;
-
-      if (r.hasDniPhoto) {
-        try {
-          const dataUrl = await getPhoto("dni-" + r.id);
-          if (dataUrl) {
-            const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
-            wsDetalle.addImage(imgId, { tl: { col: 14, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
-            hayFoto = true;
-          }
-        } catch (e) { console.error("No se pudo incluir la foto de DNI del alquiler " + r.id + ":", e); }
-      }
-      if (r.hasComprobantePhoto) {
-        try {
-          const dataUrl = await getPhoto("comp-" + r.id);
-          if (dataUrl) {
-            const imgId = wb.addImage({ base64: dataUrl, extension: "jpeg" });
-            wsDetalle.addImage(imgId, { tl: { col: 15, row: excelRow - 1 }, ext: { width: 55, height: 55 } });
-            hayFoto = true;
-          }
-        } catch (e) { console.error("No se pudo incluir la foto del comprobante del alquiler " + r.id + ":", e); }
-      }
-      if (hayFoto) wsDetalle.getRow(excelRow).height = 44;
-    }
-
-    const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const blob = await construirBlobReporteAlquileres();
     presentReport(blob, `Reporte_Alquileres_${todayISO()}.xlsx`);
   } catch (err) {
+    if (err && err.message === "SIN_DATOS_ALQUILERES") { alert("Todavía no hay ningún alquiler cargado."); return; }
     console.error("Error generando el reporte de alquileres:", err);
     alert("Hubo un problema generando el reporte: " + (err && err.message ? err.message : err));
   }
 }
 
+function construirBlobReporteStock() {
+  if (typeof XLSX === "undefined") throw new Error("No se pudo cargar el generador de Excel (necesita internet la primera vez).");
+  if (state.machines.length === 0) throw new Error("SIN_DATOS_STOCK");
+
+  const act = activeRentals();
+  const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquiladas", "Disponibles"]];
+  state.machines.forEach((m) => {
+    const alquiladas = act.filter((r) => r.machineId === m.id).length;
+    stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
+  });
+  const totalMaquinas = state.machines.reduce((s, m) => s + (Number(m.totalQty) || 0), 0);
+  const totalAlquiladas = act.length;
+  stockData.push([]);
+  stockData.push(["TOTALES", "", "", totalMaquinas, totalAlquiladas, totalMaquinas - totalAlquiladas]);
+
+  const wb = XLSX.utils.book_new();
+  const wsStock = XLSX.utils.aoa_to_sheet(stockData);
+  wsStock["!cols"] = [{ wch: 10 }, { wch: 28 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
+
+  const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  return new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
 function generarReporteStock() {
   try {
-    if (typeof XLSX === "undefined") {
-      alert("No se pudo cargar el generador de Excel (necesita internet la primera vez). Conectate a internet y volvé a tocar el botón.");
-      return;
-    }
-    if (state.machines.length === 0) {
-      alert("Todavía no hay ninguna máquina cargada.");
-      return;
-    }
-
-    const act = activeRentals();
-    const stockData = [["Código", "Máquina", "Categoría", "Cantidad total", "Alquiladas", "Disponibles"]];
-    state.machines.forEach((m) => {
-      const alquiladas = act.filter((r) => r.machineId === m.id).length;
-      stockData.push([m.code || "", m.name, m.category, m.totalQty, alquiladas, m.totalQty - alquiladas]);
-    });
-    const totalMaquinas = state.machines.reduce((s, m) => s + (Number(m.totalQty) || 0), 0);
-    const totalAlquiladas = act.length;
-    stockData.push([]);
-    stockData.push(["TOTALES", "", "", totalMaquinas, totalAlquiladas, totalMaquinas - totalAlquiladas]);
-
-    const wb = XLSX.utils.book_new();
-    const wsStock = XLSX.utils.aoa_to_sheet(stockData);
-    wsStock["!cols"] = [{ wch: 10 }, { wch: 28 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
-    XLSX.utils.book_append_sheet(wb, wsStock, "Stock");
-
-    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const blob = construirBlobReporteStock();
     presentReport(blob, `Reporte_Stock_${todayISO()}.xlsx`);
   } catch (err) {
+    if (err && err.message === "SIN_DATOS_STOCK") { alert("Todavía no hay ninguna máquina cargada."); return; }
     console.error("Error generando el reporte de stock:", err);
     alert("Hubo un problema generando el reporte: " + (err && err.message ? err.message : err));
   }
