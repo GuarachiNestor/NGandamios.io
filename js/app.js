@@ -63,9 +63,9 @@ const LS_MACHINES = "ah_machines";
 const LS_RENTALS = "ah_rentals";
 
 function loadMachines() { try { return JSON.parse(localStorage.getItem(LS_MACHINES)) || []; } catch { return []; } }
-function saveMachines(list) { localStorage.setItem(LS_MACHINES, JSON.stringify(list)); }
+function saveMachines(list) { localStorage.setItem(LS_MACHINES, JSON.stringify(list)); scheduleAutoSync(); }
 function loadRentals() { try { return JSON.parse(localStorage.getItem(LS_RENTALS)) || []; } catch { return []; } }
-function saveRentals(list) { localStorage.setItem(LS_RENTALS, JSON.stringify(list)); }
+function saveRentals(list) { localStorage.setItem(LS_RENTALS, JSON.stringify(list)); scheduleAutoSync(); }
 
 let dbPromise = null;
 function getDB() {
@@ -80,12 +80,13 @@ function getDB() {
 }
 async function savePhoto(key, dataUrl) {
   const db = await getDB();
-  return new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     const tx = db.transaction("photos", "readwrite");
     tx.objectStore("photos").put(dataUrl, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  scheduleAutoSync();
 }
 async function getPhoto(key) {
   const db = await getDB();
@@ -98,11 +99,245 @@ async function getPhoto(key) {
 }
 async function deletePhoto(key) {
   const db = await getDB();
-  return new Promise((resolve) => {
+  await new Promise((resolve) => {
     const tx = db.transaction("photos", "readwrite");
     tx.objectStore("photos").delete(key);
     tx.oncomplete = () => resolve();
   });
+  scheduleAutoSync();
+}
+
+/* ===================== GOOGLE DRIVE: RESPALDO AUTOMÁTICO ===================== */
+// 1) Creá un proyecto en https://console.cloud.google.com/ (gratis).
+// 2) Activá la "Google Drive API".
+// 3) Configurá la pantalla de consentimiento OAuth (tipo "Externo", agregate a vos mismo
+//    como usuario de prueba) y creá una credencial "ID de cliente de OAuth" de tipo
+//    "Aplicación web", con tu dominio de GitHub Pages en "Orígenes de JavaScript autorizados"
+//    (ej: https://guarachinestor.github.io).
+// 4) Pegá acá abajo el Client ID que te da Google:
+const GOOGLE_CLIENT_ID = "1042664850210-9gc6c389nst5dl6v9t0sddhoulp2c487.apps.googleusercontent.com";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_BACKUP_FILENAME = "AlquilerHerramientas_backup.json";
+const LS_DRIVE_SIGNED_IN = "ah_drive_signed_in";
+
+const driveSync = {
+  tokenClient: null,
+  ready: false,
+  accessToken: null,
+  tokenExpiresAt: 0,
+  signedIn: false,
+  syncing: false,
+  lastSyncAt: null,
+  fileId: null,
+  saveTimer: null,
+};
+let isRestoringFromDrive = false;
+
+function initGoogleAuthWhenReady() {
+  if (GOOGLE_CLIENT_ID.indexOf("PONÉ_ACÁ") === 0) return; // todavía no configuraron el Client ID
+  if (window.google && google.accounts && google.accounts.oauth2) {
+    driveSync.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => handleTokenResponse(resp),
+    });
+    driveSync.ready = true;
+    if (localStorage.getItem(LS_DRIVE_SIGNED_IN) === "1") {
+      driveSync.tokenClient.requestAccessToken({ prompt: "" }); // intenta recuperar la sesión sin mostrar el popup
+    }
+  } else {
+    setTimeout(initGoogleAuthWhenReady, 300);
+  }
+}
+
+function handleTokenResponse(resp) {
+  if (resp.error) {
+    console.error("Error de Google Sign-In:", resp);
+    driveSync.signedIn = false;
+    updateDriveStatusUI();
+    return;
+  }
+  driveSync.accessToken = resp.access_token;
+  driveSync.tokenExpiresAt = Date.now() + (Number(resp.expires_in) || 3500) * 1000;
+  const eraLogin = !driveSync.signedIn;
+  driveSync.signedIn = true;
+  localStorage.setItem(LS_DRIVE_SIGNED_IN, "1");
+  updateDriveStatusUI();
+  if (eraLogin) restoreFromDriveIfNeeded();
+}
+
+function signInGoogle() {
+  if (!driveSync.ready) {
+    alert("Todavía se está cargando el inicio de sesión de Google. Esperá un segundo e intentá de nuevo.\n\n(Si nunca cargó, es porque falta configurar el GOOGLE_CLIENT_ID en el código.)");
+    return;
+  }
+  driveSync.tokenClient.requestAccessToken({ prompt: "consent" });
+}
+
+function signOutGoogle() {
+  if (driveSync.accessToken && window.google && google.accounts.oauth2.revoke) {
+    google.accounts.oauth2.revoke(driveSync.accessToken, () => {});
+  }
+  driveSync.accessToken = null;
+  driveSync.signedIn = false;
+  driveSync.fileId = null;
+  localStorage.removeItem(LS_DRIVE_SIGNED_IN);
+  updateDriveStatusUI();
+  toast("Sesión de Google cerrada");
+}
+
+function ensureAccessToken() {
+  return new Promise((resolve, reject) => {
+    if (driveSync.accessToken && Date.now() < driveSync.tokenExpiresAt - 30000) {
+      resolve(driveSync.accessToken);
+      return;
+    }
+    if (!driveSync.tokenClient) { reject(new Error("Google Sign-In no está listo")); return; }
+    driveSync.tokenClient.callback = (resp) => {
+      handleTokenResponse(resp);
+      if (resp.error) reject(new Error(resp.error));
+      else resolve(resp.access_token);
+    };
+    driveSync.tokenClient.requestAccessToken({ prompt: "" });
+  });
+}
+
+async function driveFindBackupFileId(token) {
+  if (driveSync.fileId) return driveSync.fileId;
+  const q = encodeURIComponent(`name='${DRIVE_BACKUP_FILENAME}' and trashed=false`);
+  const resp = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await resp.json();
+  if (data.files && data.files.length > 0) driveSync.fileId = data.files[0].id;
+  return driveSync.fileId;
+}
+
+async function collectBackupPayload() {
+  const db = await getDB();
+  const keys = await new Promise((resolve, reject) => {
+    const tx = db.transaction("photos", "readonly");
+    const req = tx.objectStore("photos").getAllKeys();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const photos = {};
+  for (const key of keys) photos[key] = await getPhoto(key);
+  return { version: 1, savedAt: new Date().toISOString(), machines: state.machines, rentals: state.rentals, photos };
+}
+
+function scheduleAutoSync(immediate) {
+  if (!driveSync.signedIn || isRestoringFromDrive) return;
+  clearTimeout(driveSync.saveTimer);
+  if (immediate) { uploadBackupToDrive(); return; }
+  driveSync.saveTimer = setTimeout(uploadBackupToDrive, 2500);
+}
+
+async function uploadBackupToDrive() {
+  driveSync.syncing = true;
+  updateDriveStatusUI();
+  try {
+    const token = await ensureAccessToken();
+    const payload = await collectBackupPayload();
+    const fileId = await driveFindBackupFileId(token);
+    const metadata = { name: DRIVE_BACKUP_FILENAME, mimeType: "application/json" };
+    const boundary = "ahboundary" + Date.now();
+    const body =
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+        `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(payload)}\r\n--${boundary}--`;
+    const url = fileId
+        ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
+        : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+    const resp = await fetch(url, {
+      method: fileId ? "PATCH" : "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+      body,
+    });
+    const data = await resp.json();
+    if (data.id) driveSync.fileId = data.id;
+    driveSync.lastSyncAt = new Date();
+  } catch (err) {
+    console.error("Error subiendo el respaldo a Drive:", err);
+  } finally {
+    driveSync.syncing = false;
+    updateDriveStatusUI();
+  }
+}
+
+async function restoreFromDriveIfNeeded() {
+  try {
+    const token = await ensureAccessToken();
+    const fileId = await driveFindBackupFileId(token);
+    if (!fileId) {
+      if (state.machines.length > 0 || state.rentals.length > 0) scheduleAutoSync(true);
+      return;
+    }
+    const resp = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const backup = await resp.json();
+    const hayDatosLocales = state.machines.length > 0 || state.rentals.length > 0;
+    if (!hayDatosLocales) {
+      await applyBackup(backup);
+      toast("Se restauraron tus datos desde Google Drive");
+    } else if (confirm("Encontramos un respaldo guardado en tu cuenta de Google.\n\n¿Reemplazar los datos de este celu por los del respaldo?\n\n(Cancelar mantiene lo que ya tenés cargado acá y lo sube como respaldo nuevo).")) {
+      await applyBackup(backup);
+      toast("Datos restaurados desde Google Drive");
+    } else {
+      scheduleAutoSync(true);
+    }
+  } catch (err) {
+    console.error("Error restaurando desde Drive:", err);
+  }
+}
+
+async function applyBackup(backup) {
+  isRestoringFromDrive = true;
+  try {
+    state.machines = backup.machines || [];
+    state.rentals = backup.rentals || [];
+    saveMachines(state.machines);
+    saveRentals(state.rentals);
+    const photos = backup.photos || {};
+    for (const key of Object.keys(photos)) await savePhoto(key, photos[key]);
+    render();
+  } finally {
+    isRestoringFromDrive = false;
+  }
+}
+
+function fmtRelativeTime(date) {
+  const diffMin = Math.round((Date.now() - date.getTime()) / 60000);
+  if (diffMin < 1) return "recién";
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return `hace ${diffH} h`;
+  return `el ${fmtDate(date.toISOString().split("T")[0])}`;
+}
+
+function driveSyncBlockHTML() {
+  if (!driveSync.signedIn) {
+    return `
+      <div class="block-title">${icon("cloud")} Respaldo en Google Drive</div>
+      <div class="hint" style="margin-top:0">Guardá copia automática de máquinas, alquileres y fotos en tu cuenta de Google, para no perder nada si se rompe o se pierde el celu.</div>
+      <button class="btn btn-secondary btn-block" id="btn-google-signin">${icon("cloud")} Iniciar sesión con Google</button>`;
+  }
+  const estado = driveSync.syncing ? "Sincronizando..." : driveSync.lastSyncAt ? `Sincronizado ${fmtRelativeTime(driveSync.lastSyncAt)}` : "Conectado";
+  return `
+    <div class="block-title">${icon("cloud")} Respaldo en Google Drive</div>
+    <div class="hint" style="margin-top:0" id="drive-sync-state">${estado}</div>
+    <button class="btn-mini" id="btn-google-signout">Cerrar sesión de Google</button>`;
+}
+
+function updateDriveStatusUI() {
+  const block = document.getElementById("drive-sync-block");
+  if (block) block.innerHTML = driveSyncBlockHTML();
+  bindDriveSyncButtons();
+}
+
+function bindDriveSyncButtons() {
+  document.getElementById("btn-google-signin")?.addEventListener("click", signInGoogle);
+  document.getElementById("btn-google-signout")?.addEventListener("click", signOutGoogle);
 }
 
 /* ===================== ESTADO ===================== */
@@ -212,6 +447,7 @@ function viewInicio() {
   let html = `
     <div class="section-title tag-font">Inicio</div>
     <div class="section-sub">Resumen general del local</div>
+    <div class="section-block" id="drive-sync-block">${driveSyncBlockHTML()}</div>
     <div class="stat-grid">
       ${statCard("Máquinas", state.machines.length, "package", "var(--ink)")}
       ${statCard("Disponibles", totalDisponibles, "check", "var(--green)")}
@@ -513,6 +749,7 @@ function bindContentEvents() {
     document.getElementById("btn-reporte-alquileres")?.addEventListener("click", generarReporteAlquileres);
     document.getElementById("btn-reporte-stock")?.addEventListener("click", generarReporteStock);
     document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
+    bindDriveSyncButtons();
   }
 }
 
@@ -1239,3 +1476,4 @@ if ("serviceWorker" in navigator) {
 
 /* ===================== INICIO ===================== */
 render();
+initGoogleAuthWhenReady();
