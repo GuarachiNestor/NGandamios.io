@@ -350,8 +350,8 @@ async function driveUploadBinaryFile(token, filename, blob, mimeType, folderId, 
   const multipartBody = new Blob([metaPart, filePartHeader, blob, closeDelim]);
 
   const url = existingFileId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
-    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+      ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
+      : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
   const resp = await fetch(url, {
     method: existingFileId ? "PATCH" : "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
@@ -539,6 +539,70 @@ function remainingStock(machine, items, excludeItemId) {
 
 function activeRentals() { return state.rentals.filter((r) => r.status === "Activo"); }
 
+// Agrupa una lista de alquileres por groupId (los que vienen de un mismo
+// presupuesto con varias máquinas), preservando el orden de la lista de entrada.
+// Los alquileres viejos sin groupId (o sueltos) quedan en su propio grupo de a uno.
+function groupRentalsForDisplay(list) {
+  const seen = new Map();
+  const order = [];
+  list.forEach((r) => {
+    const gid = r.groupId || r.id;
+    if (!seen.has(gid)) { seen.set(gid, []); order.push(gid); }
+    seen.get(gid).push(r);
+  });
+  return order.map((gid) => seen.get(gid));
+}
+
+function renderRentalGroups(list) {
+  return groupRentalsForDisplay(list)
+      .map((group) => (group.length > 1 ? groupedRentalCardHTML(group) : rentalCard(group[0])))
+      .join("");
+}
+
+function groupedRentalCardHTML(group) {
+  const todayStr = todayISO();
+  const client = group[0].clientName;
+  const allDevuelto = group.every((r) => r.status === "Devuelto");
+  const anyOverdue = group.some((r) => r.status === "Activo" && r.dueDate < todayStr);
+  const overallLabel = allDevuelto ? "Devuelto" : anyOverdue ? "Atrasado" : "Activo";
+  const overallBadge = allDevuelto ? "badge-green" : anyOverdue ? "badge-red" : "badge-yellow";
+  const totalCombinado = group.reduce((s, r) => s + (Number(r.total) || 0), 0);
+  const maxDueDate = group.reduce((max, r) => (r.dueDate > max ? r.dueDate : max), group[0].dueDate);
+
+  const rows = group.map((r) => {
+    const isOverdue = r.status === "Activo" && r.dueDate < todayStr;
+    const statusLabel = r.status === "Devuelto" ? "Devuelto" : isOverdue ? "Atrasado" : "Activo";
+    const badgeClass = r.status === "Devuelto" ? "badge-green" : isOverdue ? "badge-red" : "badge-yellow";
+    return `
+      <div class="group-item-row" data-open-rental="${r.id}">
+        <div class="group-item-top">
+          <span class="group-item-name">${esc(r.machineName)}</span>
+          <span class="badge ${badgeClass}" style="font-size:9.5px">${statusLabel}</span>
+        </div>
+        <div class="group-item-bottom">
+          <span>${icon("clock", "icon-inline")}Hasta ${fmtDate(r.dueDate)}</span>
+          <span class="amount">${fmtMoney(r.total)}</span>
+        </div>
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="card group-card" style="cursor:default">
+      <div class="card-top">
+        <div>
+          <div class="card-name">${esc(client)}</div>
+          <div class="card-sub">${group.length} máquinas del mismo presupuesto</div>
+        </div>
+        <div class="badge ${overallBadge}">${overallLabel}</div>
+      </div>
+      <div class="group-items">${rows}</div>
+      <div class="card-bottom" style="border-top:1px solid var(--border);padding-top:8px;margin-top:2px">
+        <span>${icon("clock", "icon-inline")}Hasta ${fmtDate(maxDueDate)}</span>
+        <span class="amount">Total: ${fmtMoney(totalCombinado)}</span>
+      </div>
+    </div>`;
+}
+
 function toast(msg) {
   const t = document.createElement("div");
   t.className = "toast";
@@ -625,7 +689,7 @@ function viewInicio() {
 
   if (overdue.length > 0) {
     html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--red);display:flex;align-items:center;gap:6px">${icon("alert", "icon-inline")} Devoluciones atrasadas</div>`;
-    overdue.forEach((r) => (html += rentalCard(r)));
+    html += renderRentalGroups(overdue);
     html += `<div style="height:8px"></div>`;
   }
 
@@ -641,7 +705,7 @@ function viewInicio() {
 
   if (act.length > 0) {
     html += `<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--sub)">Alquileres activos (${act.length})</div>`;
-    act.slice(0, 5).forEach((r) => (html += rentalCard(r)));
+    html += renderRentalGroups(act.slice(0, 8));
   }
 
   if (state.machines.length === 0) {
@@ -861,7 +925,7 @@ function viewAlquileres() {
     </div>`;
 
   if (filtered.length === 0) html += emptyState("list", "No hay alquileres para mostrar acá.");
-  filtered.forEach((r) => (html += rentalCard(r)));
+  html += renderRentalGroups(filtered);
   return html;
 }
 
@@ -1007,6 +1071,8 @@ function bindNuevoAlquiler() {
     // Se crea un alquiler por cada máquina (cada una con su propio período y
     // fecha de devolución), repartiendo el descuento en proporción a lo que
     // pesa cada máquina en el total, así el stock sigue contándose por máquina.
+    // Comparten "groupId" para que la lista de Alquileres los muestre juntos.
+    const groupId = uid();
     let discountAsignado = 0;
     const nuevosRentals = [];
     for (let i = 0; i < validItems.length; i++) {
@@ -1025,7 +1091,7 @@ function bindNuevoAlquiler() {
       }
       const total = Math.max(0, Math.round(lineTotal - itemDiscountAmount));
       nuevosRentals.push({
-        id: uid(),
+        id: uid(), groupId,
         machineId: machine.id, machineName: machine.name, machineCode: machine.code,
         clientName: f.clientName.trim(), clientPhone: f.clientPhone.trim(), clientDni: f.clientDni.trim(),
         periodType: it.periodType, periodCount: Number(it.periodCount), unitPrice,
