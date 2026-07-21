@@ -515,6 +515,7 @@ const state = {
   showMachineForm: false,
   editingMachine: null,
   viewingRentalId: null,
+  viewingClientKey: null,
   nuevoAlquiler: freshRentalForm(),
 };
 
@@ -633,6 +634,7 @@ function render() {
         ${navBtn("package", "Máquinas", "maquinas")}
         ${navBtn("plus", "Alquilar", "nuevo", true)}
         ${navBtn("list", "Alquileres", "alquileres")}
+        ${navBtn("users", "Clientes", "clientes")}
       </div>
     </div>
     <div id="modal-root"></div>
@@ -663,6 +665,7 @@ function renderContent() {
   else if (state.tab === "maquinas") c.innerHTML = viewMaquinas();
   else if (state.tab === "nuevo") c.innerHTML = viewNuevo();
   else if (state.tab === "alquileres") c.innerHTML = viewAlquileres();
+  else if (state.tab === "clientes") c.innerHTML = viewClientes();
   bindContentEvents();
 }
 
@@ -775,6 +778,7 @@ function viewMaquinas() {
 /* ===================== VISTA: NUEVO ALQUILER ===================== */
 function viewNuevo() {
   const f = state.nuevoAlquiler;
+  const clientesParaSelect = groupRentalsByClient(state.rentals).sort((a, b) => a.clientName.localeCompare(b.clientName));
 
   // Recalcular precio unitario de cada renglón según su propia máquina y período
   f.items.forEach((it) => {
@@ -801,6 +805,14 @@ function viewNuevo() {
 
     <div class="section-block">
       <div class="block-title">${icon("id")} Datos del cliente</div>
+      ${clientesParaSelect.length > 0 ? `
+      <div class="field">
+        <label>Cliente existente (opcional)</label>
+        <select id="f-existing-client">
+          <option value="">Cliente nuevo (completar a mano)</option>
+          ${clientesParaSelect.map((g) => `<option value="${esc(g.key)}">${esc(g.clientName)}${g.clientPhone ? " · " + esc(g.clientPhone) : ""}</option>`).join("")}
+        </select>
+      </div>` : ""}
       <div class="field"><label>Nombre y apellido</label><input type="text" id="f-clientName" value="${esc(f.clientName)}" placeholder="Juan Pérez"></div>
       <div class="field-row">
         <div class="field"><label>Teléfono</label><input type="tel" id="f-clientPhone" value="${esc(f.clientPhone)}" placeholder="011-5555-5555"></div>
@@ -949,7 +961,97 @@ function rentalCard(rental) {
     </div>`;
 }
 
-/* ===================== EVENTOS DEL CONTENIDO ===================== */
+/* ===================== VISTA: CLIENTES ===================== */
+// Agrupa los alquileres por cliente: DNI si hay, si no teléfono, si no nombre.
+// Así los clientes "se arman solos" a partir de lo que ya se cargó en cada alquiler.
+function groupRentalsByClient(rentals) {
+  const map = new Map();
+  rentals.forEach((r) => {
+    const key = (r.clientDni && r.clientDni.trim()) || (r.clientPhone && r.clientPhone.trim()) || (r.clientName && r.clientName.trim()) || "sin-datos";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  });
+  return Array.from(map.entries()).map(([key, list]) => {
+    const sorted = [...list].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+    const mostRecent = sorted[sorted.length - 1];
+    return {
+      key,
+      clientName: mostRecent.clientName || "Sin nombre",
+      clientPhone: mostRecent.clientPhone || "",
+      clientDni: mostRecent.clientDni || "",
+      rentals: sorted,
+      count: sorted.length,
+      activeCount: sorted.filter((r) => r.status === "Activo" || (r.status !== "Devuelto" && r.dueDate < todayISO())).length,
+      totalFacturado: sorted.reduce((s, r) => s + (Number(r.total) || 0), 0),
+    };
+  });
+}
+
+function viewClientes() {
+  const groups = groupRentalsByClient(state.rentals).sort((a, b) => a.clientName.localeCompare(b.clientName));
+  let html = `
+    <div class="section-title tag-font">Clientes</div>
+    <div class="section-sub">${groups.length} cliente(s), armado solo a partir de los alquileres cargados</div>`;
+
+  if (groups.length === 0) {
+    html += emptyState("users", "Todavía no hay clientes. Se arman solos cuando cargues un alquiler.");
+  } else {
+    html += groups.map((g) => clienteCardHTML(g)).join("");
+  }
+  return html;
+}
+
+function clienteCardHTML(g) {
+  const subParts = [g.clientPhone, g.clientDni ? "DNI " + g.clientDni : ""].filter(Boolean);
+  return `
+    <div class="card" data-open-client="${esc(g.key)}">
+      <div class="card-top">
+        <div>
+          <div class="card-name">${esc(g.clientName)}</div>
+          <div class="card-sub">${esc(subParts.join(" · ") || "Sin teléfono ni DNI cargado")}</div>
+        </div>
+        <div class="badge badge-yellow">${g.count} alquiler(es)</div>
+      </div>
+      <div class="card-bottom">
+        <span>${icon("check", "icon-inline")}${g.activeCount} activo(s)</span>
+        <span class="amount">Total: ${fmtMoney(g.totalFacturado)}</span>
+      </div>
+    </div>`;
+}
+
+function clientDetailModal() {
+  const g = groupRentalsByClient(state.rentals).find((x) => x.key === state.viewingClientKey);
+  if (!g) return "";
+  return `
+    <div class="modal-overlay" id="overlay">
+      <div class="modal">
+        <div class="modal-head">
+          <div class="modal-title tag-font">${esc(g.clientName)}</div>
+          <button class="modal-close" id="close-modal">${icon("x")}</button>
+        </div>
+        ${g.clientPhone ? `<div class="row-line"><span class="lab">Teléfono</span><span class="val">${esc(g.clientPhone)}</span></div>` : ""}
+        ${g.clientDni ? `<div class="row-line"><span class="lab">DNI</span><span class="val">${esc(g.clientDni)}</span></div>` : ""}
+        <div class="row-line"><span class="lab">Alquileres totales</span><span class="val">${g.count}</span></div>
+        <div class="row-line"><span class="lab">Activos</span><span class="val">${g.activeCount}</span></div>
+        <div class="presupuesto-total"><span class="lab">Total facturado</span><span class="val tag-font">${fmtMoney(g.totalFacturado)}</span></div>
+        <div class="block-title" style="margin-top:16px">${icon("list")} Historial</div>
+        ${renderRentalGroups([...g.rentals].reverse())}
+      </div>
+    </div>`;
+}
+
+function bindClientDetail() {
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModals(); });
+  document.getElementById("close-modal").addEventListener("click", closeModals);
+  document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => {
+    state.viewingClientKey = null;
+    state.viewingRentalId = b.dataset.openRental;
+    renewingOpen = false;
+    renderModals();
+  }));
+}
+
+
 function bindContentEvents() {
   document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => { state.tab = b.dataset.go; render(); }));
 
@@ -975,6 +1077,10 @@ function bindContentEvents() {
   if (state.tab === "alquileres") {
     document.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { alquileresFilter = b.dataset.filter; renderContent(); }));
     document.querySelectorAll("[data-open-rental]").forEach((b) => b.addEventListener("click", () => { state.viewingRentalId = b.dataset.openRental; renewingOpen = false; renderModals(); }));
+  }
+
+  if (state.tab === "clientes") {
+    document.querySelectorAll("[data-open-client]").forEach((b) => b.addEventListener("click", () => { state.viewingClientKey = b.dataset.openClient; renderModals(); }));
   }
 
   if (state.tab === "inicio") {
@@ -1016,6 +1122,15 @@ function bindNuevoAlquiler() {
     updatePrecioDisplay();
   }));
 
+  document.getElementById("f-existing-client")?.addEventListener("change", (e) => {
+    if (!e.target.value) return;
+    const g = groupRentalsByClient(state.rentals).find((x) => x.key === e.target.value);
+    if (!g) return;
+    f.clientName = g.clientName === "Sin nombre" ? "" : g.clientName;
+    f.clientPhone = g.clientPhone;
+    f.clientDni = g.clientDni;
+    renderContent();
+  });
   document.getElementById("f-clientName").addEventListener("input", (e) => { f.clientName = e.target.value; });
   document.getElementById("f-clientPhone").addEventListener("input", (e) => { f.clientPhone = e.target.value; });
   document.getElementById("f-clientDni").addEventListener("input", (e) => { f.clientDni = e.target.value; });
@@ -1172,6 +1287,7 @@ function renderModals() {
   const root = document.getElementById("modal-root");
   if (state.showMachineForm) { root.innerHTML = machineFormModal(state.editingMachine); bindMachineForm(); return; }
   if (state.viewingRentalId) { root.innerHTML = rentalDetailModal(); bindRentalDetail(); return; }
+  if (state.viewingClientKey) { root.innerHTML = clientDetailModal(); bindClientDetail(); return; }
   root.innerHTML = "";
 }
 
@@ -1243,7 +1359,9 @@ function rentalDetailModal() {
   if (!rental) return "";
   const isOverdue = rental.status === "Activo" && rental.dueDate < todayISO();
   const machine = state.machines.find((m) => m.id === rental.machineId);
-  const renewExtra = machine ? priceForPeriod(machine, renewPeriodType) * (Number(renewCount) || 0) : 0;
+  const rawRenewExtra = machine ? priceForPeriod(machine, renewPeriodType) * (Number(renewCount) || 0) : 0;
+  const renewDiscountPct = Math.min(100, Math.max(0, Number(rental.discountPct) || 0));
+  const renewExtra = Math.max(0, Math.round(rawRenewExtra - rawRenewExtra * (renewDiscountPct / 100)));
   const renewNewDueDate = calcDueDate(rental.dueDate, renewPeriodType, renewCount);
   return `
     <div class="modal-overlay" id="overlay">
@@ -1283,7 +1401,6 @@ function rentalDetailModal() {
         <div class="action-row" style="margin-top:16px">
           ${rental.status === "Activo" && !renewingOpen ? `<button class="btn btn-secondary" id="btn-open-renew">${icon("clock")} Renovar</button>` : ""}
           ${rental.status === "Activo" && !renewingOpen ? `<button class="btn btn-primary" id="btn-return">${icon("check")} Marcar devuelto</button>` : ""}
-          <button class="btn-danger" id="btn-delete-rental">${icon("trash")}</button>
         </div>
       </div>
     </div>`;
@@ -1332,7 +1449,9 @@ async function bindRentalDetail() {
   });
   document.getElementById("btn-confirm-renew")?.addEventListener("click", () => {
     const machine = state.machines.find((m) => m.id === rental.machineId);
-    const extra = machine ? priceForPeriod(machine, renewPeriodType) * (Number(renewCount) || 0) : 0;
+    const discountPct = Math.min(100, Math.max(0, Number(rental.discountPct) || 0));
+    const rawExtra = machine ? priceForPeriod(machine, renewPeriodType) * (Number(renewCount) || 0) : 0;
+    const extra = Math.max(0, Math.round(rawExtra - rawExtra * (discountPct / 100)));
     const newDueDate = calcDueDate(rental.dueDate, renewPeriodType, renewCount);
     const previousDueDate = rental.dueDate;
     state.rentals = state.rentals.map((r) => {
@@ -1347,17 +1466,6 @@ async function bindRentalDetail() {
     renderModals();
     renderContent();
   });
-
-  document.getElementById("btn-delete-rental").addEventListener("click", async () => {
-    if (!confirm("¿Eliminar este alquiler?")) return;
-    state.rentals = state.rentals.filter((r) => r.id !== rental.id);
-    saveRentals(state.rentals);
-    await deletePhoto("dni-" + rental.id);
-    await deletePhoto("comp-" + rental.id);
-    toast("Alquiler eliminado");
-    closeModals();
-    renderContent();
-  });
 }
 
 function refreshRentalModal() {
@@ -1370,6 +1478,7 @@ function closeModals() {
   state.showMachineForm = false;
   state.editingMachine = null;
   state.viewingRentalId = null;
+  state.viewingClientKey = null;
   renderModals();
 }
 
