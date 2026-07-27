@@ -408,43 +408,72 @@ async function syncReportsToDrive(manual) {
   }
 }
 
+// Combina dos listas de registros (máquinas o alquileres) por su "id": si un
+// registro está solo de un lado, se conserva tal cual (nunca se borra nada).
+// Si el mismo id existe en ambos lados (se editó en dos dispositivos), gana
+// la versión con el updatedAt/createdAt más reciente.
+function mergeById(localList, remoteList) {
+  const map = new Map();
+  (remoteList || []).forEach((item) => { if (item && item.id) map.set(item.id, item); });
+  (localList || []).forEach((item) => {
+    if (!item || !item.id) return;
+    const existing = map.get(item.id);
+    if (!existing) { map.set(item.id, item); return; }
+    const localTime = new Date(item.updatedAt || item.createdAt || 0).getTime();
+    const remoteTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+    map.set(item.id, localTime >= remoteTime ? item : existing);
+  });
+  return Array.from(map.values());
+}
+
 async function restoreFromDriveIfNeeded() {
   try {
     const token = await ensureAccessToken();
     const fileId = await driveFindBackupFileId(token);
     if (!fileId) {
-      if (state.machines.length > 0 || state.rentals.length > 0) scheduleAutoSync(true);
+      // Todavía no hay nada en Drive: subimos lo que ya tenemos acá (si hay algo).
+      scheduleAutoSync(true);
       return;
     }
     const resp = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const backup = await resp.json();
-    const hayDatosLocales = state.machines.length > 0 || state.rentals.length > 0;
-    if (!hayDatosLocales) {
-      await applyBackup(backup);
-      toast("Se restauraron tus datos desde Google Drive");
-    } else if (confirm("Encontramos un respaldo guardado en tu cuenta de Google.\n\n¿Reemplazar los datos de este celu por los del respaldo?\n\n(Cancelar mantiene lo que ya tenés cargado acá y lo sube como respaldo nuevo).")) {
-      await applyBackup(backup);
-      toast("Datos restaurados desde Google Drive");
-    } else {
-      scheduleAutoSync(true);
-    }
+    await mergeBackupIntoLocal(backup);
+    // Subimos el resultado combinado, para que este dispositivo y Drive queden
+    // igualados (así el próximo dispositivo que entre también recibe todo).
+    scheduleAutoSync(true);
   } catch (err) {
     console.error("Error restaurando desde Drive:", err);
   }
 }
 
-async function applyBackup(backup) {
+async function mergeBackupIntoLocal(backup) {
   isRestoringFromDrive = true;
   try {
-    state.machines = backup.machines || [];
-    state.rentals = backup.rentals || [];
+    const mergedMachines = mergeById(state.machines, backup.machines || []);
+    const mergedRentals = mergeById(state.rentals, backup.rentals || []);
+    const huboCambios =
+        JSON.stringify(mergedMachines) !== JSON.stringify(state.machines) ||
+        JSON.stringify(mergedRentals) !== JSON.stringify(state.rentals);
+
+    state.machines = mergedMachines;
+    state.rentals = mergedRentals;
     saveMachines(state.machines);
     saveRentals(state.rentals);
-    const photos = backup.photos || {};
-    for (const key of Object.keys(photos)) await savePhoto(key, photos[key]);
-    render();
+
+    // Fotos: se agregan las que falten localmente, nunca se borra ninguna.
+    const remotePhotos = backup.photos || {};
+    for (const key of Object.keys(remotePhotos)) {
+      let yaExiste = null;
+      try { yaExiste = await getPhoto(key); } catch (e) { /* no existe local, la agregamos */ }
+      if (!yaExiste) await savePhoto(key, remotePhotos[key]);
+    }
+
+    if (huboCambios) {
+      render();
+      toast("Se combinaron los datos con los de Google Drive");
+    }
   } finally {
     isRestoringFromDrive = false;
   }
@@ -1206,7 +1235,7 @@ function bindNuevoAlquiler() {
       }
       const total = Math.max(0, Math.round(lineTotal - itemDiscountAmount));
       nuevosRentals.push({
-        id: uid(), groupId,
+        id: uid(), groupId, updatedAt: new Date().toISOString(),
         machineId: machine.id, machineName: machine.name, machineCode: machine.code,
         clientName: f.clientName.trim(), clientPhone: f.clientPhone.trim(), clientDni: f.clientDni.trim(),
         periodType: it.periodType, periodCount: Number(it.periodCount), unitPrice,
@@ -1328,6 +1357,7 @@ function bindMachineForm() {
     if (!name) { alert("Ponele un nombre a la máquina"); return; }
     const data = {
       id: state.editingMachine ? state.editingMachine.id : uid(),
+      updatedAt: new Date().toISOString(),
       code: document.getElementById("m-code").value.trim(),
       name,
       category: document.getElementById("m-category").value,
@@ -1422,7 +1452,7 @@ async function bindRentalDetail() {
   }
 
   document.getElementById("btn-return")?.addEventListener("click", () => {
-    state.rentals = state.rentals.map((r) => (r.id === rental.id ? { ...r, status: "Devuelto", returnedDate: todayISO() } : r));
+    state.rentals = state.rentals.map((r) => (r.id === rental.id ? { ...r, status: "Devuelto", returnedDate: todayISO(), updatedAt: new Date().toISOString() } : r));
     saveRentals(state.rentals);
     toast("Marcado como devuelto");
     closeModals();
@@ -1458,7 +1488,7 @@ async function bindRentalDetail() {
       if (r.id !== rental.id) return r;
       const renewals = r.renewals ? [...r.renewals] : [];
       renewals.push({ date: todayISO(), periodType: renewPeriodType, count: Number(renewCount) || 0, cost: extra, previousDueDate, newDueDate });
-      return { ...r, dueDate: newDueDate, total: (Number(r.total) || 0) + extra, renewals };
+      return { ...r, dueDate: newDueDate, total: (Number(r.total) || 0) + extra, renewals, updatedAt: new Date().toISOString() };
     });
     saveRentals(state.rentals);
     renewingOpen = false;
