@@ -765,8 +765,8 @@ function emptyState(iconName, text) {
 }
 
 /* ===================== VISTA: MAQUINAS ===================== */
+let maquinasFilter = "";
 function viewMaquinas() {
-  const act = activeRentals();
   let html = `
     <div style="display:flex;justify-content:space-between;align-items:flex-end">
       <div>
@@ -774,16 +774,31 @@ function viewMaquinas() {
         <div class="section-sub">${state.machines.length} tipos de herramienta cargados</div>
       </div>
       <button class="btn" style="background:var(--ink);color:#fff;padding:8px 12px;font-size:12.5px;margin-bottom:14px" data-add-machine>${icon("plus")} Agregar</button>
-    </div>`;
+    </div>
+    ${state.machines.length > 0 ? `
+    <div class="field" style="margin-bottom:12px">
+      <input type="text" id="maquinas-search" value="${esc(maquinasFilter)}" placeholder="Buscar máquina por nombre...">
+    </div>` : ""}
+    <div id="maquinas-list">${maquinasListHTML()}</div>`;
+  return html;
+}
 
-  if (state.machines.length === 0) html += emptyState("package", "No hay máquinas cargadas todavía.");
+function maquinasListHTML() {
+  const act = activeRentals();
+  const term = maquinasFilter.trim().toLowerCase();
+  const filtradas = term
+      ? state.machines.filter((m) => (m.name || "").toLowerCase().includes(term) || (m.code || "").toLowerCase().includes(term))
+      : state.machines;
 
-  state.machines.forEach((m) => {
+  if (state.machines.length === 0) return emptyState("package", "No hay máquinas cargadas todavía.");
+  if (filtradas.length === 0) return emptyState("package", `No encontré ninguna máquina que coincida con "${maquinasFilter}".`);
+
+  return filtradas.map((m) => {
     const alquiladas = act.filter((r) => r.machineId === m.id).length;
     const disponibles = m.totalQty - alquiladas;
     const badgeClass = disponibles <= 0 ? "badge-red" : disponibles < m.totalQty ? "badge-orange" : "badge-green";
     const badgeText = disponibles <= 0 ? "SIN STOCK" : `${disponibles}/${m.totalQty} libres`;
-    html += `
+    return `
       <div class="card" style="cursor:default">
         <div class="card-top">
           <div>
@@ -803,8 +818,7 @@ function viewMaquinas() {
           <button class="btn-danger" data-delete-machine="${m.id}">${icon("trash")}</button>
         </div>
       </div>`;
-  });
-  return html;
+  }).join("");
 }
 
 /* ===================== VISTA: NUEVO ALQUILER ===================== */
@@ -1095,24 +1109,36 @@ function bindClientDetail() {
 }
 
 
+function bindMaquinasListButtons() {
+  document.querySelectorAll("[data-edit-machine]").forEach((b) => b.addEventListener("click", () => {
+    state.editingMachine = state.machines.find((m) => m.id === b.dataset.editMachine);
+    state.showMachineForm = true; renderModals();
+  }));
+  document.querySelectorAll("[data-delete-machine]").forEach((b) => b.addEventListener("click", () => {
+    const m = state.machines.find((x) => x.id === b.dataset.deleteMachine);
+    if (confirm(`¿Eliminar "${m.name}"?`)) {
+      state.machines = state.machines.filter((x) => x.id !== m.id);
+      saveMachines(state.machines);
+      toast("Máquina eliminada");
+      const list = document.getElementById("maquinas-list");
+      if (list) { list.innerHTML = maquinasListHTML(); bindMaquinasListButtons(); }
+      const sub = document.querySelector(".section-sub");
+      if (sub) sub.textContent = `${state.machines.length} tipos de herramienta cargados`;
+    }
+  }));
+}
+
 function bindContentEvents() {
   document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => { state.tab = b.dataset.go; render(); }));
 
   if (state.tab === "maquinas") {
     document.querySelector("[data-add-machine]")?.addEventListener("click", () => { state.editingMachine = null; state.showMachineForm = true; renderModals(); });
-    document.querySelectorAll("[data-edit-machine]").forEach((b) => b.addEventListener("click", () => {
-      state.editingMachine = state.machines.find((m) => m.id === b.dataset.editMachine);
-      state.showMachineForm = true; renderModals();
-    }));
-    document.querySelectorAll("[data-delete-machine]").forEach((b) => b.addEventListener("click", () => {
-      const m = state.machines.find((x) => x.id === b.dataset.deleteMachine);
-      if (confirm(`¿Eliminar "${m.name}"?`)) {
-        state.machines = state.machines.filter((x) => x.id !== m.id);
-        saveMachines(state.machines);
-        toast("Máquina eliminada");
-        renderContent();
-      }
-    }));
+    document.getElementById("maquinas-search")?.addEventListener("input", (e) => {
+      maquinasFilter = e.target.value;
+      const list = document.getElementById("maquinas-list");
+      if (list) { list.innerHTML = maquinasListHTML(); bindMaquinasListButtons(); }
+    });
+    bindMaquinasListButtons();
   }
 
   if (state.tab === "nuevo") bindNuevoAlquiler();
